@@ -1,0 +1,65 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "launchreel-render",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // One throwaway container per video. standard-4 = 4 vCPU, 12 GiB, 20 GB disk.
+  "containers": [
+    {
+      "class_name": "VideoSandbox",
+      "image": "../runner/Dockerfile",
+      "instance_type": "standard-4",
+      "max_instances": 20, // raise with your model provider rate limits; see docs/ARCHITECTURE.md
+      // A deploy replaces running containers; give in-flight renders up to 40 minutes to finish.
+      "rollout_active_grace_period": 2400
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "Sandbox", "class_name": "VideoSandbox" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["VideoSandbox"] }],
+
+  // The durable render pipeline. The web Worker starts instances through its own binding.
+  "workflows": [{ "name": "video-jobs", "binding": "VIDEO_JOBS", "class_name": "VideoJobWorkflow" }],
+
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_HYPERDRIVE_ID",
+      "localConnectionString": "postgresql://launchreel:launchreel@localhost:5432/launchreel"
+    }
+  ],
+  "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "launchreel-videos" }],
+
+  // Safety net: fail and refund jobs whose workflow died, every 10 minutes.
+  "triggers": { "crons": ["*/10 * * * *"] },
+
+  "vars": {
+    // Raw (binary) file reads out of the container need the RPC transport.
+    "SANDBOX_TRANSPORT": "rpc",
+    "PUBLIC_VIDEO_BASE_URL": "https://videos.example.com",
+    "BRAND_NAME": "LaunchReel",
+    // Which agent makes the videos: "claude" (Claude Agent SDK) or "openai" (Codex CLI). If the primary
+    // engine fails because of its provider (bad key, rate limit, outage), the job is retried once on the
+    // fallback. An engine whose API key isn't set is skipped. Set ENGINE_FALLBACK to "" to turn it off.
+    // OpenAI first for now, until the Anthropic key works. Then switch back: ENGINE "claude", ENGINE_FALLBACK "openai".
+    "ENGINE": "openai",
+    "ENGINE_FALLBACK": "claude",
+    // Cost control: free videos use each provider's cheaper model and are capped at 15 seconds.
+    "CLAUDE_MODEL_PAID": "claude-opus-5-5",
+    "CLAUDE_MODEL_FREE": "claude-sonnet-5",
+    // gpt-6-astra is closer to Opus but costs 2.5x as much, and Codex has no dollar cap (only MAX_TURNS and
+    // the time limit), so a paid video could cost more than it sells for. Measure before switching:
+    // ENGINE=openai OPENAI_MODEL=gpt-6-astra npm run measure
+    "OPENAI_MODEL_PAID": "gpt-6-sol",
+    "OPENAI_MODEL_FREE": "gpt-6-sol",
+    "CLAUDE_EFFORT": "medium",
+    "MAX_COST_PER_JOB_USD": "8",
+    "MAX_TURNS": "150"
+  },
+  // Secrets (npx wrangler secret put ANTHROPIC_API_KEY / OPENAI_API_KEY): used only by the egress handlers,
+  // never sent into containers.
+  "observability": { "enabled": true }
+}

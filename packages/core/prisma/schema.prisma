@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String        @id // Clerk user id
+  email            String?
+  credits          Int           @default(1) // free trial video
+  plan             Plan          @default(FREE)
+  billingCustomerId     String?  @unique // Dodo Payments customer_id
+  billingSubscriptionId String?  // Dodo Payments subscription_id of the active plan
+  createdAt        DateTime      @default(now())
+  jobs             Job[]
+  ledger           CreditEntry[]
+  repoToken        RepoToken?
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  AGENCY
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum SourceType {
+  WEBSITE
+  GITHUB
+}
+
+model Job {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id])
+  status       JobStatus  @default(QUEUED)
+  sourceType   SourceType
+  sourceUrl    String
+  tone         String?
+  format       String     @default("landscape")
+  durationSec  Int        @default(20)
+  notes        String?    // free-text direction from the customer
+  parentJobId  String?    // set for revisions ("re-roll the outro")
+  creditsCost  Int
+  watermark    Boolean    @default(false)
+  privateRepo  Boolean    @default(false) // GitHub source fetched with the customer's saved token
+
+  videoUrl     String?
+  posterUrl    String?
+  shareCopy    String?
+  plan         String?    // brag-plan.md, shown to the customer
+  error        String?
+
+  // --- unit economics, filled by the render Worker from the agent's result (summed across engine attempts) ---
+  model            String?
+  numTurns         Int?
+  inputTokens      Int?
+  outputTokens     Int?
+  cacheReadTokens  Int?
+  cacheWriteTokens Int?
+  llmCostUsd       Float?   // what the model provider charges us
+  computeSeconds   Int?     // wall-clock of the worker, for compute COGS
+  attempts         Int      @default(0)
+
+  createdAt    DateTime   @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+}
+
+model CreditEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  delta     Int      // +grant / -spend / +refund
+  reason    String   // "subscription:pro", "pack_1", "job:<id>", "refund:<id>"
+  paymentRef String? @unique // idempotency key from the payment provider (payment, subscription period, refund, dispute)
+  createdAt DateTime @default(now())
+}
+
+/// A customer's GitHub token for private repos. Encrypted in their browser to the render Worker's public key
+/// (see packages/core/src/repo-token.ts); only the render Worker can decrypt it. This table never holds a
+/// readable token.
+model RepoToken {
+  userId     String    @id
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sealed     String    // JSON envelope from sealToken(), bound to userId
+  hint       String    // e.g. "github_pat…9f2c", so the customer can tell which token is saved
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+}

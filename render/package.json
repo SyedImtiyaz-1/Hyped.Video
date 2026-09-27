@@ -1,0 +1,21 @@
+{
+  "name": "render",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker: durable render workflow, per-job Sandbox containers, egress key injection.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "0.12.10",
+    "@launchreel/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "wrangler": "^4.141.0"
+  }
+}

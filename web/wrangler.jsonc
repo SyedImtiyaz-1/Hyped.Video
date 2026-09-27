@@ -1,0 +1,33 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "launchreel-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [
+    // Self-reference required by OpenNext; must match "name".
+    { "binding": "WORKER_SELF_REFERENCE", "service": "launchreel-web" }
+  ],
+  "hyperdrive": [
+    {
+      // Neon Postgres through Hyperdrive (connection pooling at the edge).
+      // Create it with: npx wrangler hyperdrive create launchreel-db --connection-string="$DATABASE_URL"
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_HYPERDRIVE_ID",
+      "localConnectionString": "postgresql://launchreel:launchreel@localhost:5432/launchreel"
+    }
+  ],
+  "workflows": [
+    // Durable render pipeline, implemented in the render Worker (../render).
+    { "binding": "VIDEO_JOBS", "name": "video-jobs", "class_name": "VideoJobWorkflow", "script_name": "launchreel-render" }
+  ],
+  "vars": {
+    // Public key that browsers use to encrypt customers' private-repo tokens. Only the render Worker holds the
+    // matching private key. Set by `npm run repo-keys -- --production`; empty means private repos are off.
+    "REPO_TOKEN_PUBLIC_KEY": ""
+  },
+  "observability": { "enabled": true }
+  // Secrets (set with `npx wrangler secret put <NAME>`): CLERK_SECRET_KEY, DODO_PAYMENTS_API_KEY,
+  // DODO_PAYMENTS_WEBHOOK_KEY, ADMIN_USER_IDS. Build-time public vars (NEXT_PUBLIC_*) come from the root .env.
+}

@@ -1,0 +1,18 @@
+node_modules
+.env
+.env.*
+!.env.example
+.dev.vars
+.next
+dist
+runner/dist
+render/.wrangler
+web/.open-next
+web/.wrangler
+measurements
+.DS_Store
+*.log
+# The brag-slim skill is vendored (pinned) in runner/skills; the full /brag skill (16 MB of music) isn't
+# used in production. Update the vendored copy with: npm run sync-skill
+runner/skills/brag/
+*.tsbuildinfo
