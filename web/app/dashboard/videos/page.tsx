@@ -51,7 +51,7 @@ export default async function VideosPage({ searchParams }: { searchParams: Promi
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <form action="/dashboard/videos" className="w-full lg:max-w-sm">
             {status !== "all" && <input type="hidden" name="status" value={status} />}
-            <Input name="q" defaultValue={q} placeholder="Search by site or repo…" prefix={<Search />} aria-label="Search videos" />
+            <Input key={q} name="q" defaultValue={q} placeholder="Search by site, repo or notes…" prefix={<Search />} aria-label="Search videos" />
           </form>
           <div className="overflow-x-auto">
             <SegmentedLinks active={status} items={FILTERS.map((f) => ({ ...f, href: href(f.key) }))} />

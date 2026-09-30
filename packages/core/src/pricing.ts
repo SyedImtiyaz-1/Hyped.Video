@@ -1,5 +1,7 @@
 // Single source of truth for what we charge and what it costs us.
 // Prices are $/1M tokens (first-party APIs, Sept 2026). Re-check both providers before changing plans.
+import type { Quality } from "./contract";
+
 export const MODEL_PRICES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite5m: number }> = {
   // Anthropic (Claude engine)
   "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite5m: 5 },
@@ -24,40 +26,63 @@ export function llmCostUsd(model: string, u: TokenUsage): number {
 // Render compute: a Cloudflare Containers standard-4 instance (4 vCPU, 12 GiB, 20 GB disk).
 // 4 × $0.000020 vCPU-s + 12 × $0.0000025 GiB-s + 20 × $0.00000007 GB-s ≈ $0.00011/s, about $0.10 per 15-minute render.
 export const COMPUTE_USD_PER_SECOND = 0.00011;
+// Voiceover: speech from gpt-4o-mini-tts (about $0.015 per minute of audio) and word timings from Workers AI
+// Whisper (about $0.0005 per minute). Added to a job's AI cost from the voice tool's usage log.
+export const VOICE_TTS_USD_PER_MINUTE = 0.015;
+export const VOICE_TIMINGS_USD_PER_MINUTE = 0.0005;
 // Storage + egress per video on R2 (~15 MB mp4, zero egress) — effectively rounding error.
 export const STORAGE_USD_PER_VIDEO = 0.002;
 
-// Credits: 1 credit = one ~20s video in one format. Revisions are cheaper because the plan is reused.
-export const CREDIT_COST = { newVideo: 2, revision: 1 } as const;
+// Credits: 1 credit = one Standard video up to 30 seconds; longer videos and Studio use more (creditsFor).
+// Customers buy credits in one-time packs that never expire. There are no subscriptions.
 
 /** Videos longer than this are full launch videos: a longer structure, higher limits and more credits. */
 export const LONG_VIDEO_SECONDS = 45;
 
-/** Credits for a video of this length: short teasers (up to 30s) x1, up to 60s x2, up to 90s x3. */
-export function creditsFor(kind: keyof typeof CREDIT_COST, durationSec: number): number {
-  return CREDIT_COST[kind] * (durationSec > 60 ? 3 : durationSec > 30 ? 2 : 1);
+/** Studio videos run on the more capable (and more expensive) engine. Re-check once Studio costs are measured. */
+export const QUALITY_CREDIT_MULTIPLIER: Record<Quality, number> = { standard: 1, studio: 3 };
+
+/**
+ * Credits for a video: 1 up to 30s, 2 up to 60s, 3 up to 90s, times the quality tier.
+ * A revision reuses the plan and composition, so it costs half, rounded up.
+ */
+export function creditsFor(kind: "newVideo" | "revision", durationSec: number, quality: Quality = "standard"): number {
+  const full = (durationSec > 60 ? 3 : durationSec > 30 ? 2 : 1) * QUALITY_CREDIT_MULTIPLIER[quality];
+  return kind === "revision" ? Math.ceil(full / 2) : full;
 }
 
-export type PlanId = "FREE" | "STARTER" | "PRO" | "AGENCY";
-export const PLANS: Record<PlanId, { name: string; priceUsd: number; creditsPerMonth: number; watermark: boolean; blurb: string }> = {
-  FREE: { name: "Free", priceUsd: 0, creditsPerMonth: 0, watermark: true, blurb: "1 watermarked video to try it" },
-  STARTER: { name: "Starter", priceUsd: 39, creditsPerMonth: 8, watermark: false, blurb: "4 videos/mo, all tones and formats" },
-  PRO: { name: "Pro", priceUsd: 99, creditsPerMonth: 24, watermark: false, blurb: "12 videos/mo, revisions, vertical + square" },
-  AGENCY: { name: "Agency", priceUsd: 299, creditsPerMonth: 60, watermark: false, blurb: "30 videos/mo, white-label, priority queue" },
-};
-export const PACK_1 = { priceUsd: 19, credits: 2 }; // pay-as-you-go single video
+/**
+ * Every new account: 5 free credits, about $10 of our cost at most (~$1.75 a credit at worst, ~$0.50 typically).
+ * Videos made before the first purchase carry the watermark.
+ */
+export const TRIAL_CREDITS = 5;
 
-export type PaidPlan = Exclude<PlanId, "FREE">;
+/**
+ * One-time credit packs. `credits` is everything the buyer gets, `bonus` of it on top ("10 + 2 bonus"). The web app maps
+ * each key to a Dodo product (DODO_PRODUCT_<KEY>). Prices include tax everywhere (Dodo tax-inclusive pricing): India pays
+ * the fixed rupee price by billing country (Localized Pricing), everyone else the USD price. Every pack divides evenly
+ * into Studio videos, so no credits are ever stranded.
+ * Measured cost (7 production Standard videos, Sept 2026): $0.90 a video on average, $1.66 at most. With every credit
+ * used and no tax: USD packs keep 47–69% after Dodo's fee; India 22–42%. Watch /admin as volume grows.
+ */
+export const PACKS = {
+  STARTER: { name: "Starter", credits: 3, bonus: 0, priceUsd: 12, priceInr: 599 },
+  CREATOR: { name: "Creator", credits: 12, bonus: 2, priceUsd: 29, priceInr: 1999 },
+  PRO: { name: "Pro", credits: 36, bonus: 6, priceUsd: 69, priceInr: 4999 },
+} as const satisfies Record<string, { name: string; credits: number; bonus: number; priceUsd: number; priceInr: number }>;
+export type PackKey = keyof typeof PACKS;
 
-// What each purchasable item grants. Provider-agnostic: the web app maps these keys to payment-provider
-// product IDs. To add the Launch Kit or an extra-video pack, add a line here and a product in Dodo.
-export const PRODUCTS = {
-  STARTER: { kind: "subscription", plan: "STARTER" },
-  PRO: { kind: "subscription", plan: "PRO" },
-  AGENCY: { kind: "subscription", plan: "AGENCY" },
-  PACK_1: { kind: "one_time", credits: PACK_1.credits },
-} as const satisfies Record<string, { kind: "subscription"; plan: PaidPlan } | { kind: "one_time"; credits: number }>;
-export type ProductKey = keyof typeof PRODUCTS;
+export type Currency = "usd" | "inr";
+/** Countries that pay rupee prices. Dodo matches these by billing country at checkout, so the site shows them there too. */
+export const INR_COUNTRIES = ["IN"];
+export const packPrice = (key: PackKey, currency: Currency) => (currency === "inr" ? PACKS[key].priceInr : PACKS[key].priceUsd);
+/** What one credit costs in a pack. */
+export const perCredit = (key: PackKey, currency: Currency) => packPrice(key, currency) / PACKS[key].credits;
+/** For /admin's margin math only (Dodo converts at live rates): rupees per dollar, and the GST inside rupee prices. */
+export const INR_PER_USD_ESTIMATE = 96;
+export const INDIA_GST = 0.18;
+/** How much cheaper a credit is than in the Starter pack, in whole percent, rounded down so it's never overstated. */
+export const savingsPercent = (key: PackKey, currency: Currency) => Math.floor((1 - perCredit(key, currency) / perCredit("STARTER", currency)) * 100);
 
 export function unitEconomics(job: { llmCostUsd: number | null; computeSeconds: number | null }) {
   const llm = job.llmCostUsd ?? 0;

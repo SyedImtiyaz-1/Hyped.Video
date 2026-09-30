@@ -11,7 +11,7 @@ Proposed plan starting Monday, September 28, 2026. Every number is an estimate u
 
 ## Three facts that shape the plan
 
-1. **"LaunchReel" is taken.** Three products already use the name:
+1. **The name is Hyped ([hyped.video](https://hyped.video)), bought on Sep 29, 2026.** The placeholder "LaunchReel" was taken, as were about 150 other names checked (every short launch/ship/demo/reel .com). Hyped had no clash among launch-video or AI-video tools. Earlier findings on the old name:
    - [gudlab/launchreel](https://github.com/gudlab/launchreel), an open-source tool that turns websites into launch videos
    - [launchreel.app](https://launchreel.app/)
    - [launchreel.pro](https://launchreel.pro/)

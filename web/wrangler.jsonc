@@ -1,33 +1,51 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
-  "name": "launchreel-web",
+  "name": "hyped-web",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // esbuild's keep-names wraps functions in __name(), which breaks inline scripts serialized into the HTML (next-themes'
+  // theme script throws "__name is not defined"). OpenNext recommends turning it off.
+  "keep_names": false,
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  // The site: hyped.video, with www redirecting to it (middleware.ts). workers.dev stays on as a fallback
+  // (Wrangler turns it off when routes are set, unless told otherwise).
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "hyped.video", "custom_domain": true },
+    { "pattern": "www.hyped.video", "custom_domain": true }
+  ],
   "services": [
     // Self-reference required by OpenNext; must match "name".
-    { "binding": "WORKER_SELF_REFERENCE", "service": "launchreel-web" }
+    { "binding": "WORKER_SELF_REFERENCE", "service": "hyped-web" }
   ],
   "hyperdrive": [
     {
       // Neon Postgres through Hyperdrive (connection pooling at the edge).
-      // Create it with: npx wrangler hyperdrive create launchreel-db --connection-string="$DATABASE_URL"
+      // Created with: npx wrangler hyperdrive create hyped-db --caching-disabled --connection-string="…"
       "binding": "HYPERDRIVE",
-      "id": "REPLACE_WITH_HYPERDRIVE_ID",
-      "localConnectionString": "postgresql://launchreel:launchreel@localhost:5432/launchreel"
+      "id": "871b856bfba04f05b292f88ccaadfb3e", // hyped-db → Neon (caching disabled)
+      "localConnectionString": "postgresql://launchreel:launchreel@localhost:5433/launchreel"
     }
   ],
   "workflows": [
     // Durable render pipeline, implemented in the render Worker (../render).
-    { "binding": "VIDEO_JOBS", "name": "video-jobs", "class_name": "VideoJobWorkflow", "script_name": "launchreel-render" }
+    { "binding": "VIDEO_JOBS", "name": "video-jobs", "class_name": "VideoJobWorkflow", "script_name": "hyped-render" }
+  ],
+  "r2_buckets": [
+    // Reel uploads: browsers send their video here in parts (uploads/<userId>/…), and the render Worker reads it from
+    // the same bucket. Local `next dev` uses the render Worker's dev routes instead (web/lib/reel-uploads.ts).
+    { "binding": "VIDEOS", "bucket_name": "hyped-videos" }
   ],
   "vars": {
+    // Studio runs on Claude: "false" shows it as Coming soon (and the API refuses it) until the render Worker's
+    // ANTHROPIC_API_KEY works. Set "true" and redeploy to turn it on.
+    "STUDIO_ENABLED": "false",
     // Public key that browsers use to encrypt customers' private-repo tokens. Only the render Worker holds the
     // matching private key. Set by `npm run repo-keys -- --production`; empty means private repos are off.
-    "REPO_TOKEN_PUBLIC_KEY": ""
+    "REPO_TOKEN_PUBLIC_KEY": "{\"key_ops\":[],\"ext\":true,\"kty\":\"EC\",\"x\":\"OenRa6CrAbOjJBqZckk68v9eepNl6ZR6e03Vd4NaYAk\",\"y\":\"dALtyaYGNzgCnXpNFqTkvcRAX5BHyJG0D4fNZbyysgQ\",\"crv\":\"P-256\",\"kid\":\"p20260929\"}"
   },
   "observability": { "enabled": true }
-  // Secrets (set with `npx wrangler secret put <NAME>`): CLERK_SECRET_KEY, DODO_PAYMENTS_API_KEY,
-  // DODO_PAYMENTS_WEBHOOK_KEY, ADMIN_USER_IDS. Build-time public vars (NEXT_PUBLIC_*) come from the root .env.
+  // Secrets (copied from the local env files by `npm run secrets`): CLERK_SECRET_KEY, ADMIN_USER_IDS and the
+  // DODO_* settings. Build-time public vars (NEXT_PUBLIC_*) come from web/.env.local, via scripts/deploy-web.mjs.
 }

@@ -52,3 +52,12 @@ export function toneLabel(tone: string | null): string {
 export const FORMAT_LABEL: Record<string, string> = { landscape: "16:9", vertical: "9:16", square: "1:1" };
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Quality tier names: the only thing customers see of the engine behind each tier. */
+export const QUALITY_LABEL: Record<string, string> = { standard: "Standard", studio: "Studio" };
+
+/** "$12", "$2.42", "₹1,999", "₹167": a price as customers see it. Fractions round up, so a price is never understated. */
+export function money(amount: number, currency: "usd" | "inr"): string {
+  if (currency === "inr") return `₹${Math.ceil(amount).toLocaleString("en-IN")}`;
+  return Number.isInteger(amount) ? `$${amount}` : `$${(Math.ceil(amount * 100) / 100).toFixed(2)}`;
+}

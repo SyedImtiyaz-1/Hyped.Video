@@ -25,7 +25,8 @@ export async function runClaude(workdir: string, req: BragRequest, opts: RunOpti
         allowDangerouslySkipPermissions: true, // safe only because each job runs in a throwaway container
         settingSources: ["project"], // loads .claude/skills/brag-slim from the workspace
         // In the container, ANTHROPIC_BASE_URL points at the render Worker's virtual host, which adds the real key.
-        env: baseAgentEnv(["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_MAX_RETRIES", "IS_SANDBOX"]),
+        // In the container the voice tool reaches speech through the Worker proxy (the key there is a placeholder).
+        env: baseAgentEnv(["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_MAX_RETRIES", "IS_SANDBOX", ...(process.env.OPENAI_BASE_URL ? ["OPENAI_BASE_URL", "OPENAI_API_KEY"] : [])]),
         persistSession: false,
         abortController,
       },

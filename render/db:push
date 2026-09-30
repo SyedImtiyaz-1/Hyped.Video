@@ -1,0 +1,9 @@
+> node --env-file-if-exists=.env node_modules/prisma/build/index.js db push --schema packages/core/prisma/schema.prisma
+
+Environment variables loaded from .env
+Prisma schema loaded from packages/core/prisma/schema.prisma
+Datasource "db": PostgreSQL database "neondb", schema "public" at "ep-royal-pond-b4khw240.c-6.us-east-2.aws.neon.tech"
+
+Error: P1001: Can't reach database server at `ep-royal-pond-b4khw240.c-6.us-east-2.aws.neon.tech:5432`
+
+Please make sure your database server is running at `ep-royal-pond-b4khw240.c-6.us-east-2.aws.neon.tech:5432`.

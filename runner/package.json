@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/run-job.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/run-job.mjs --external:@anthropic-ai/claude-agent-sdk",
+    "build": "esbuild src/run-job.ts src/voice.ts src/reel.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --out-extension:.js=.mjs --external:@anthropic-ai/claude-agent-sdk",
     "measure": "tsx --env-file=../.env src/measure.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:credits": "tsx --env-file=../.env src/dev-credits.ts",
+    "voice-previews": "tsx --env-file=../.env src/voice-previews.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",

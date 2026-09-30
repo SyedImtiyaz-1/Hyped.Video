@@ -27,7 +27,7 @@ export function redactSecrets(text: string): string {
 /** What a customer sees when a render fails. The technical error stays in the database for support. */
 export function customerError(error: string | null | undefined): string {
   if (!error) return "Something went wrong while making this video.";
-  if (/private repository/i.test(error)) return "We couldn't open your private repository. Check that your saved GitHub token can read it (Settings → Private repositories).";
+  if (/private repository/i.test(error)) return "We couldn't open your private repository. Check that your GitHub token can read it, then paste a new one under the repo link and try again.";
   if (isProviderFailure(error)) return "Our AI provider had a problem, so this video couldn't be made. Please try again in a few minutes.";
   if (/took too long|timed out/i.test(error)) return "This video took too long to make. Please try again.";
   if (/max turns|max steps|cost ceiling|budget/i.test(error)) return "This video was too complex to finish. Try again with simpler notes.";

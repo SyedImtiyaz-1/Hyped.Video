@@ -1,25 +1,23 @@
 import { ArrowRight, CircleCheck, Clapperboard, Clock, Coins, Globe, GitPullRequest, Palette, Plus, Scissors } from "lucide-react";
 import Link from "next/link";
-import { CREDIT_COST, creditsFor, PLANS } from "@launchreel/core";
+import { creditsFor, QUALITY_CREDIT_MULTIPLIER } from "@launchreel/core";
 import { AutoRefresh } from "@/components/video/auto-refresh";
 import { VideoList } from "@/components/video/video-row";
-import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PageBody, PageHeader, SectionTitle } from "@/components/ui/page";
-import { Progress } from "@/components/ui/progress";
 import { getStats, listVideos } from "@/lib/data";
 import { formatDuration, plural } from "@/lib/format";
+import { studioAvailable } from "@/lib/studio";
 import { requireUser } from "@/lib/user";
 import { Stat } from "./stat";
 
 export const dynamic = "force-dynamic";
 
 export default async function Overview() {
-  const user = await requireUser();
+  const [user, studio] = await Promise.all([requireUser(), studioAvailable()]);
   const [recent, stats] = await Promise.all([listVideos(user.id, { take: 6 }), getStats(user.id)]);
-  const plan = PLANS[user.plan];
   const rendering = recent.some((j) => j.status === "QUEUED" || j.status === "RUNNING");
 
   return (
@@ -27,10 +25,10 @@ export default async function Overview() {
       <AutoRefresh active={rendering} />
       <PageHeader
         title="Overview"
-        description="Your launch videos, credits and plan at a glance."
+        description="Your launch videos and credits at a glance."
         actions={
           <>
-            {user.plan === "FREE" && <ButtonLink href="/dashboard/billing">Upgrade</ButtonLink>}
+            {user.credits < 2 && <ButtonLink href="/dashboard/billing">Buy credits</ButtonLink>}
             <ButtonLink href="/dashboard/new" variant="primary">
               <Plus />
               New video
@@ -40,7 +38,7 @@ export default async function Overview() {
       />
       <PageBody className="space-y-8">
         <div className="grid grid-cols-2 gap-3 md:gap-4 lg:grid-cols-4">
-          <Stat label="Credits" value={user.credits} hint={`≈ ${Math.floor(user.credits / CREDIT_COST.newVideo)} videos`} icon={<Coins />} />
+          <Stat label="Credits" value={user.credits} hint={`Enough for ${plural(user.credits, "short video")}`} icon={<Coins />} />
           <Stat label="Videos this month" value={stats.videosThisMonth} hint={`${plural(stats.revisionsThisMonth, "revision")} · ${stats.inProgress} in progress`} icon={<Clapperboard />} />
           <Stat label="Success rate" value={stats.successRate == null ? "—" : `${Math.round(stats.successRate * 100)}%`} hint="Last 30 days" icon={<CircleCheck />} />
           <Stat label="Avg. render time" value={formatDuration(stats.avgRenderSeconds)} hint="Last 30 days" icon={<Clock />} />
@@ -53,7 +51,7 @@ export default async function Overview() {
             <section className="min-w-0">
               <SectionTitle
                 actions={
-                  <Link href="/dashboard/videos" className="inline-flex items-center gap-1 text-sm text-gray-900 hover:text-gray-1000">
+                  <Link href="/dashboard/videos" className="inline-flex items-center gap-1 py-2 text-sm text-gray-900 hover:text-gray-1000">
                     View all <ArrowRight className="size-3.5" />
                   </Link>
                 }
@@ -64,22 +62,21 @@ export default async function Overview() {
             </section>
             <aside className="space-y-4">
               <Card>
-                <CardHeader title="Plan" actions={<Badge tone={user.plan === "FREE" ? "gray" : "blue"}>{plan.name}</Badge>} />
+                <CardHeader title="Credits" />
                 <CardContent className="space-y-3">
                   <div className="flex items-baseline justify-between text-sm">
                     <span className="text-gray-900">Credits left</span>
-                    <span className="font-medium tabular-nums">
-                      {user.credits}
-                      {plan.creditsPerMonth > 0 && <span className="text-gray-900"> / {plan.creditsPerMonth} a month</span>}
-                    </span>
+                    <span className="font-medium tabular-nums">{user.credits}</span>
                   </div>
-                  <Progress value={user.credits / Math.max(plan.creditsPerMonth, user.credits, 1)} />
-                  <p className="text-[13px] text-gray-900">A video up to 30s uses {creditsFor("newVideo", 30)} credits, 60s uses {creditsFor("newVideo", 60)} and 90s uses {creditsFor("newVideo", 90)}. A revision costs half.</p>
+                  <p className="text-[13px] text-gray-900">
+                    A Standard video up to 30s uses {plural(creditsFor("newVideo", 30), "credit")}, 60s uses {creditsFor("newVideo", 60)} and 90s uses {creditsFor("newVideo", 90)}.{" "}
+                    {studio ? `Studio uses ${QUALITY_CREDIT_MULTIPLIER.studio}× as many.` : `Studio (coming soon) will use ${QUALITY_CREDIT_MULTIPLIER.studio}× as many.`} A revision costs half, rounded up.
+                  </p>
                 </CardContent>
                 <CardFooter>
-                  <span>{plan.priceUsd ? `$${plan.priceUsd}/month` : "Free plan"}</span>
+                  <span>Credits never expire</span>
                   <ButtonLink href="/dashboard/billing" size="sm">
-                    {user.plan === "FREE" ? "Upgrade" : "Manage"}
+                    Buy credits
                   </ButtonLink>
                 </CardFooter>
               </Card>

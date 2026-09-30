@@ -30,16 +30,31 @@ Other costs:
 
 **Planning number: about $4.65 per delivered video on Opus 5.5 (Studio), about $2.90 on Sonnet 5 (Standard).** Both include compute and failure overhead. The per-job ceiling (`MAX_COST_PER_JOB_USD=8`) caps the tail.
 
-**Measured so far (one run, so treat it as a first data point, not an average):**
+**Measured (OpenAI `gpt-6-sol` through Codex, run locally, Sep 26–27, 2026):**
 
-| Date | Engine / model | Site | Result | Steps | Minutes | Tokens (input / output / cached) | Model $ | Total $ |
-|---|---|---|---|---|---|---|---|---|
-| 2026-09-26 | OpenAI `gpt-6-sol` (Codex) | brag example "Taxi for Taxis", 20s landscape | ✅ | 40 | 12.4 | 125k / 53k / 3.01M | $1.38 | **$1.47** |
+| Product | Source | Length | Result | Steps | Minutes | Total $ |
+|---|---|---|---|---|---|---|
+| Taxi for Taxis (brag example) | website | 20s | ✅ | 40 | 12.4 | 1.47 |
+| hackeratlas.com | website | 20s | ✅ postable | 61 | 10.9 | 1.79 |
+| koi.rest | website | 20s | ✅ postable | 69 | 19.3 | 2.25 |
+| droprun.sh | website | 20s | ✅ postable | 44 | 14.2 | 1.59 |
+| recurse.run | website | 20s | ✅ postable | 48 | 15.0 | 2.05 |
+| mosthatedtools.app | website | 20s | ❌ hung at render, timed out | 39 | 40+ | 0.70 |
+| mosthatedtools.app, retry after the fix | website | 20s | ✅ postable | 40 | 14.4 | 1.72 |
+| Whiteboard (YC) | GitHub | 20s | ✅ postable | 53 | 9.8 | 1.65 |
+| Reladraw | GitHub | 20s | ✅ postable | 62 | 10.6 | 1.48 |
+| AgentRun | GitHub | 20s | ✅ postable | 68 | 12.5 | 1.65 |
+| Treepeat (CLI, no UI) | GitHub | 20s | ✅ postable | 47 | 11.5 | 1.32 |
+| chess-postmortem | GitHub | 20s | ✅ postable | 62 | 11.6 | 1.72 |
+| droprun.sh | website | **90s** | ✅ postable | 56 | 19.4 | **2.49** |
 
-- Caching does most of the work: 94% of input tokens were cache reads at a tenth of the price.
-- At $1.47 a video, a $9 Standard video keeps about $6.40 after Dodo's fee (5.5% + 40¢) and the 15% failure allowance. That's about 71% gross margin. Confirm with more runs (5 examples plus 10 real products) and a Claude comparison before relying on it.
+- **The Step 1 bar is met on the 10 real products:** 9 of 10 succeeded and were postable (bar: 7 of 10), with a median cost of **$1.65** (bar: $5). That's **$1.80 per delivered video** once the failed run is counted, and a median time of 11.6 minutes.
+- **90 seconds costs far less than feared:** $2.49 against $1.59 for the same product at 20s. A video 4.5× longer cost 57% more.
+- **Caching does most of the work:** over 90% of input tokens were cache reads, at a tenth of the price.
+- **The failure** was a live voting app. The agent's render step waited for a page to go network-idle, which it never does, and the job timed out after 40 minutes. In production that's an automatic refund. The runner now tells the agent never to wait for network idle and to keep every command short, and it logs each command when it starts. With that fix, the retry succeeded (14 minutes, $1.72), so all 10 products produced a postable video.
+- **Margin:** at $1.80 per delivered video (failures already counted), a $9 Standard video keeps about $6.30 after Dodo's fee (5.5% + 40¢), about 70%. A 90s video at 6 credits leaves far more.
 
-**60–90 second launch videos** (not measured yet): roughly 3–4x the scenes of a 20-second teaser, so estimate $4–7 on `gpt-6-sol`. They cost 4 credits (60s) or 6 credits (90s), against 2 for a teaser. They also get 2x the turns, 2.5x the dollar ceiling and a 90-minute limit per attempt.
+**60–90 second launch videos:** measured at $2.49 for 90s (above). They cost 4 credits (60s) or 6 credits (90s), against 2 for a teaser. They also get 2x the turns, 2.5x the dollar ceiling and a 90-minute limit per attempt.
 
 **OpenAI engine (option and fallback):**
 - `gpt-6-sol` has Sonnet 5's list prices ($2 in / $10 out / $0.20 cache read), so plan on about $2.90 a video until it's measured. Codex uses tokens differently from Claude Code, so run the benchmark.

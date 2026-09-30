@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
+import { plural } from "@/lib/format";
 
-export function ReviseForm({ jobId, credits }: { jobId: string; credits: number }) {
+export function ReviseForm({ jobId, credits, cost }: { jobId: string; credits: number; cost: number }) {
   const router = useRouter();
   const [change, setChange] = useState("");
   const [busy, setBusy] = useState(false);
@@ -55,7 +56,7 @@ export function ReviseForm({ jobId, credits }: { jobId: string; credits: number 
         </p>
       )}
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[13px] text-gray-900">1 credit · you have {credits}</p>
+        <p className="text-[13px] text-gray-900">{plural(cost, "credit")} · you have {credits}</p>
         <Button type="submit" variant="primary" size="sm" disabled={busy}>
           <WandSparkles />
           {busy ? "Starting…" : "Request change"}
