@@ -1,5 +1,5 @@
 import DodoPayments from "dodopayments";
-import { PRODUCTS, type PaidPlan, type ProductKey } from "@launchreel/core";
+import type { PackKey } from "@launchreel/core";
 
 let client: DodoPayments | undefined;
 
@@ -12,24 +12,17 @@ export function dodo() {
   }));
 }
 
-// Our product keys → Dodo product IDs (create the products in the Dodo dashboard, then paste the IDs).
+// Our credit packs → Dodo product IDs (create one-time products in the Dodo dashboard, then paste the IDs).
 // Read per call, not at module load: on Workers, env values are safest read inside a request.
-const productIds = (): Record<ProductKey, string | undefined> => ({
+const productIds = (): Record<PackKey, string | undefined> => ({
   STARTER: process.env.DODO_PRODUCT_STARTER,
+  CREATOR: process.env.DODO_PRODUCT_CREATOR,
   PRO: process.env.DODO_PRODUCT_PRO,
-  AGENCY: process.env.DODO_PRODUCT_AGENCY,
-  PACK_1: process.env.DODO_PRODUCT_PACK_1,
 });
 
-export const productIdFor = (key: ProductKey) => productIds()[key];
+export const productIdFor = (key: PackKey) => productIds()[key];
 
-export function productKeyFor(productId: string): ProductKey | undefined {
+export function packFor(productId: string): PackKey | undefined {
   const ids = productIds();
-  return (Object.keys(ids) as ProductKey[]).find((k) => ids[k] === productId);
-}
-
-export function planFor(productId: string): PaidPlan | undefined {
-  const key = productKeyFor(productId);
-  const product = key ? PRODUCTS[key] : undefined;
-  return product?.kind === "subscription" ? product.plan : undefined;
+  return (Object.keys(ids) as PackKey[]).find((k) => ids[k] === productId);
 }

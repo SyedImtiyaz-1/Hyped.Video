@@ -1,18 +1,37 @@
 // Render Worker: turns a queued job into a video.
 //
 // One durable Workflow per job drives one throwaway Sandbox container running the brag-slim agent on
-// the configured engine: Claude (Claude Agent SDK) or OpenAI (Codex CLI). If the primary engine fails
-// because of its provider (bad key, rate limit, outage), the job is retried once on the fallback engine.
-// Every step is safe to retry. Whatever happens, the job ends SUCCEEDED or FAILED-and-refunded, and
+// the engine of the job's quality tier (Standard or Studio): Claude (Claude Agent SDK) or OpenAI (Codex
+// CLI), mapped in wrangler.jsonc. There is no fallback between engines. Every step is safe to retry. Whatever happens, the job ends SUCCEEDED or FAILED-and-refunded, and
 // the container is destroyed.
 //
 // No secrets enter the container: model calls go to virtual hosts that this Worker answers, adding the
 // real key on the way out. The database is only reachable from this Worker (Hyperdrive), and files move
 // through R2 bindings.
+//
+// Reels (job.kind "reel") take the same route with no agent: the customer's upload goes from R2 into the container,
+// where runner/src/reel.ts captions and edits it in a few minutes.
 import { getSandbox, Sandbox } from "@cloudflare/sandbox";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
-import { createDb, grantCredits, isProviderFailure, LONG_VIDEO_SECONDS, openToken, parseEngine, parseSealedToken, redactSecrets, type Engine, type JobResult, type JobSpec, type RepoTokenJwk } from "@launchreel/core";
+import {
+  createDb,
+  grantCredits,
+  LONG_VIDEO_SECONDS,
+  openToken,
+  parseEngine,
+  parseReel,
+  parseSealedToken,
+  redactSecrets,
+  REEL_PLAN_MODEL,
+  REEL_UPLOAD_TYPES,
+  reelSecondsFor,
+  type Engine,
+  type JobResult,
+  type JobSpec,
+  type ReelSpec,
+  type RepoTokenJwk,
+} from "@launchreel/core";
 
 // Required for egress interception: the platform routes intercepted traffic through this entrypoint.
 export { ContainerProxy } from "@cloudflare/sandbox";
@@ -23,6 +42,35 @@ export class VideoSandbox extends Sandbox<Env> {}
 // Virtual hosts: they never leave Cloudflare and need no TLS trust inside the container.
 const ANTHROPIC_HOST = "anthropic.internal";
 const OPENAI_HOST = "openai.internal";
+// Word timings for voiceover captions: speech recognition on Workers AI, so the audio never leaves Cloudflare.
+const TIMINGS_HOST = "timings.internal";
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+/**
+ * Word timings for a recording (POSTed as audio bytes): Workers AI Whisper, flattened to words. English unless
+ * x-hyped-language names another language or "auto" (reels); x-hyped-vad: 1 skips silence first.
+ */
+async function wordTimings(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+  const audio = new Uint8Array(await request.arrayBuffer());
+  if (!audio.byteLength || audio.byteLength > 20 * 1024 * 1024) return Response.json({ error: "Send up to 20 MB of audio" }, { status: 413 });
+  const prompt = decodeURIComponent(request.headers.get("x-hyped-prompt") ?? "").slice(0, 800);
+  const asked = request.headers.get("x-hyped-language");
+  const language = asked === "auto" ? undefined : asked && /^[a-z]{2}$/.test(asked) ? asked : "en";
+  const out = await env.AI.run("@cf/openai/whisper-large-v3-turbo", {
+    audio: toBase64(audio),
+    ...(language ? { language } : {}),
+    ...(request.headers.get("x-hyped-vad") === "1" ? { vad_filter: true } : {}),
+    ...(prompt ? { initial_prompt: prompt } : {}),
+  });
+  const words = (out.segments ?? []).flatMap((seg) => (seg.words ?? []).map((w) => ({ word: w.word ?? "", start: w.start ?? 0, end: w.end ?? 0 })));
+  return Response.json({ words, language: out.transcription_info?.language ?? language ?? null });
+}
 
 /** Forward a model call from the container to the real API, with the real key added here. */
 function forward(request: Request, origin: string, key: string | undefined, name: string, setAuth: (h: Headers, key: string) => void) {
@@ -52,6 +100,7 @@ VideoSandbox.outboundByHost = {
       h.set("authorization", `Bearer ${key}`);
       h.delete("x-api-key");
     }),
+  [TIMINGS_HOST]: (request: Request, env: Env) => wordTimings(request, env),
 };
 
 type Params = { jobId: string };
@@ -62,6 +111,9 @@ const MAX_POLLS = 60; // ~45 minutes per engine attempt, then the render is stop
 const MAX_POLLS_LONG = 120; // ~90 minutes for 60–90s launch videos
 const STALE_RUNNING_MINUTES = 210; // longer than two long attempts, so the cron never races a live job
 const MAX_REPO_BYTES = 500 * 1024 * 1024; // private repo downloads
+// Reels take 1-3 minutes, so they're checked more often and stopped sooner.
+const REEL_POLL_EVERY = "20 seconds";
+const REEL_MAX_POLLS = 75; // ~25 minutes
 
 /** Passes a stream through, failing it once more than `max` bytes have gone by. */
 function limitBytes(max: number) {
@@ -79,19 +131,11 @@ const sandboxFor = (env: Env, jobId: string) =>
   // Container sleeps after 15 idle minutes, so an orphaned render can't run up a bill.
   getSandbox(env.Sandbox, jobId.toLowerCase(), { sleepAfter: "15m" });
 
-/** Primary engine first, then the fallback (if set and different). Engines without an API key are skipped. */
-function engineOrder(env: Env): Engine[] {
-  const primary = parseEngine(env.ENGINE, "claude");
-  const fallback = env.ENGINE_FALLBACK ? parseEngine(env.ENGINE_FALLBACK, primary) : primary;
-  const order: Engine[] = fallback === primary ? [primary] : [primary, fallback];
-  const withKey = order.filter((e) => (e === "openai" ? env.OPENAI_API_KEY : env.ANTHROPIC_API_KEY));
-  return withKey.length ? withKey : [primary]; // no key at all: run anyway, so the job fails with a clear 401
-}
-
-/** Free videos use each provider's cheaper model; paid videos the better one. */
-function modelFor(env: Env, engine: Engine, free: boolean): string {
-  if (engine === "openai") return free ? env.OPENAI_MODEL_FREE : env.OPENAI_MODEL_PAID;
-  return free ? env.CLAUDE_MODEL_FREE : env.CLAUDE_MODEL_PAID;
+/** The engine and model behind a quality tier. Anything but "studio" is Standard (older jobs, free trials). */
+function engineFor(env: Env, quality: string): { engine: Engine; model: string } {
+  return quality === "studio"
+    ? { engine: parseEngine(env.STUDIO_ENGINE, "claude"), model: env.STUDIO_MODEL }
+    : { engine: parseEngine(env.STANDARD_ENGINE, "openai"), model: env.STANDARD_MODEL };
 }
 
 export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
@@ -116,175 +160,168 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         watermark: j.watermark,
         creditsCost: j.creditsCost,
         privateRepo: j.privateRepo,
-        // A trial video (watermarked: no credits ever bought). Pack buyers stay on the FREE plan but get full videos.
-        free: j.watermark,
+        videoType: j.videoType,
+        music: j.music,
+        brief: j.brief,
+        quality: j.quality,
+        voice: j.voice,
+        captions: j.captions,
+        template: j.template,
+        kind: j.kind,
+        reel: j.reel,
       };
     });
     if (!job) return;
+    if (job.kind === "reel") return this.reel(jobId, job, step);
 
-    // Decided once and cached, so a config change in the middle of a render can't reshuffle the attempts.
-    const engines = await step.do("pick engines", async () => engineOrder(this.env));
+    // Decided once and cached, so a config change in the middle of a render can't switch its engine.
+    const { engine, model } = await step.do("pick engine", async () => engineFor(this.env, job.quality));
 
     // 60–90s launch videos get twice the turns, 2.5x the budget and twice the time.
-    const long = !job.free && job.durationSec > LONG_VIDEO_SECONDS;
+    const long = job.durationSec > LONG_VIDEO_SECONDS;
     const maxPolls = long ? MAX_POLLS_LONG : MAX_POLLS;
 
-    // Metering is summed across engine attempts: a failed first attempt still cost tokens.
-    const totals = { model: "", numTurns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, llmCostUsd: 0, computeSeconds: 0 };
-    let outcome: { ok: boolean; error: string | null; videoUrl: string | null; posterUrl: string | null; shareCopy: string | null; plan: string | null } | null = null;
+    const processId = `render-${engine}`;
 
     try {
-      for (const [attemptIndex, engine] of engines.entries()) {
-        const processId = `render-${engine}`;
-        const hasFallback = attemptIndex < engines.length - 1;
+      await step.do(`start ${engine}`, { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        // Private repos are downloaded here, before any container starts, so a bad token fails fast and free.
+        const source = job.privateRepo ? await this.downloadPrivateRepo(job.userId, job.sourceUrl) : null;
+        const sandbox = sandboxFor(this.env, jobId);
+        if (await sandbox.getProcess(processId)) {
+          await source?.cancel(); // a previous attempt of this step already started it
+          return;
+        }
+        await sandbox.exec("rm -rf /workspace/project /workspace/out /workspace/result.json /workspace/parent.tgz /workspace/source.tgz");
 
-        await step.do(`start ${engine}`, { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
-          // Private repos are downloaded here, before any container starts, so a bad token fails fast and free.
-          const source = job.privateRepo ? await this.downloadPrivateRepo(job.userId, job.sourceUrl) : null;
-          const sandbox = sandboxFor(this.env, jobId);
-          if (await sandbox.getProcess(processId)) {
-            await source?.cancel(); // a previous attempt of this step already started it
-            return;
+        const spec: JobSpec = {
+          jobId,
+          request: {
+            source: { type: job.sourceType as JobSpec["request"]["source"]["type"], url: job.sourceUrl }, // never UPLOAD: reels branch off above
+            tone: job.tone,
+            format: job.format,
+            durationSec: job.durationSec,
+            notes: job.parentJobId ? null : job.notes,
+            revisionOf: job.parentJobId ? job.notes : null,
+            videoType: job.videoType as JobSpec["request"]["videoType"],
+            music: job.music as JobSpec["request"]["music"],
+            brief: (job.brief ?? null) as JobSpec["request"]["brief"],
+            voice: (job.voice ?? null) as JobSpec["request"]["voice"],
+            captions: job.captions,
+            template: job.template ?? null,
+          },
+          engine,
+          model,
+          watermark: job.watermark,
+          watermarkText: `Made with ${this.env.BRAND_NAME}`,
+          hasParentWorkspace: false,
+          hasSourceArchive: false,
+        };
+        if (source) {
+          await sandbox.writeFile("/workspace/source.tgz", source);
+          spec.hasSourceArchive = true;
+        }
+        if (job.parentJobId) {
+          // Revisions continue from the parent's plan and composition instead of starting over.
+          const parent = await this.env.VIDEOS.get(`jobs/${job.parentJobId}/workspace.tgz`);
+          if (parent) {
+            await sandbox.writeFile("/workspace/parent.tgz", parent.body);
+            spec.hasParentWorkspace = true;
           }
-          await sandbox.exec("rm -rf /workspace/project /workspace/out /workspace/result.json /workspace/parent.tgz /workspace/source.tgz");
-
-          const spec: JobSpec = {
-            jobId,
-            request: {
-              source: { type: job.sourceType, url: job.sourceUrl },
-              tone: job.tone,
-              format: job.format,
-              // Free videos are capped at 15s and use the cheaper model: our acquisition cost.
-              durationSec: job.free ? Math.min(job.durationSec, 15) : job.durationSec,
-              notes: job.parentJobId ? null : job.notes,
-              revisionOf: job.parentJobId ? job.notes : null,
-            },
-            engine,
-            model: modelFor(this.env, engine, job.free),
-            watermark: job.watermark,
-            watermarkText: `Made with ${this.env.BRAND_NAME}`,
-            hasParentWorkspace: false,
-            hasSourceArchive: false,
-          };
-          if (source) {
-            await sandbox.writeFile("/workspace/source.tgz", source);
-            spec.hasSourceArchive = true;
-          }
-          if (job.parentJobId) {
-            // Revisions continue from the parent's plan and composition instead of starting over.
-            const parent = await this.env.VIDEOS.get(`jobs/${job.parentJobId}/workspace.tgz`);
-            if (parent) {
-              await sandbox.writeFile("/workspace/parent.tgz", parent.body);
-              spec.hasParentWorkspace = true;
-            }
-          }
-          await sandbox.writeFile("/workspace/job.json", JSON.stringify(spec));
-          await sandbox.exec("chown -R agent:agent /workspace");
-          await sandbox.startProcess("runuser -u agent -- node /app/dist/run-job.mjs", {
-            processId,
-            cwd: "/workspace",
-            env: {
-              HOME: "/home/agent",
-              JOB_ROOT: "/workspace",
-              // Model calls go to this Worker's virtual hosts, which swap in the real keys outside the container.
-              ANTHROPIC_BASE_URL: `http://${ANTHROPIC_HOST}`,
-              ANTHROPIC_API_KEY: "added-by-worker",
-              OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`,
-              OPENAI_API_KEY: "added-by-worker",
-              CODEX_HOME: "/home/agent/.codex",
-              CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", // no telemetry or update checks from the container
-              IS_SANDBOX: "1",
-              // Claude Code retries API errors ~10 times (about 3 minutes, even for a rejected key). With another
-              // engine to fall back to, 6 retries (~40s) still rides out a short overload but fails over sooner.
-              ...(hasFallback ? { CLAUDE_CODE_MAX_RETRIES: "6" } : {}),
-              CLAUDE_EFFORT: this.env.CLAUDE_EFFORT,
-              // A fallback attempt only gets what the first attempt left of the budget (at least $1).
-              MAX_COST_PER_JOB_USD: Math.max(1, (Number(this.env.MAX_COST_PER_JOB_USD) || 8) * (long ? 2.5 : 1) - totals.llmCostUsd).toFixed(2),
-              MAX_TURNS: String((Number(this.env.MAX_TURNS) || 150) * (long ? 2 : 1)),
-              // The runner stops its agent 5 minutes before the workflow would give up on it.
-              JOB_TIMEOUT_MS: String((maxPolls * POLL_SECONDS - 300) * 1000),
-              PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
-            },
-          });
+        }
+        await sandbox.writeFile("/workspace/job.json", JSON.stringify(spec));
+        await sandbox.exec("chown -R agent:agent /workspace");
+        await sandbox.startProcess("runuser -u agent -- node /app/dist/run-job.mjs", {
+          processId,
+          cwd: "/workspace",
+          env: {
+            HOME: "/home/agent",
+            JOB_ROOT: "/workspace",
+            // Model calls go to this Worker's virtual hosts, which swap in the real keys outside the container.
+            ANTHROPIC_BASE_URL: `http://${ANTHROPIC_HOST}`,
+            ANTHROPIC_API_KEY: "added-by-worker",
+            OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`,
+            OPENAI_API_KEY: "added-by-worker",
+            CODEX_HOME: "/home/agent/.codex",
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", // no telemetry or update checks from the container
+            IS_SANDBOX: "1",
+            CLAUDE_EFFORT: this.env.CLAUDE_EFFORT,
+            MAX_COST_PER_JOB_USD: ((Number(this.env.MAX_COST_PER_JOB_USD) || 8) * (long ? 2.5 : 1)).toFixed(2),
+            MAX_TURNS: String((Number(this.env.MAX_TURNS) || 150) * (long ? 2 : 1)),
+            // The runner stops its agent 5 minutes before the workflow would give up on it.
+            JOB_TIMEOUT_MS: String((maxPolls * POLL_SECONDS - 300) * 1000),
+            PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
+            HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`,
+          },
         });
+      });
 
-        // Each check is a request to the container, which also keeps it from idling out while it works.
-        let finished = false;
-        for (let i = 0; i < maxPolls && !finished; i++) {
-          await step.sleep(`wait ${engine} ${i}`, POLL_EVERY);
-          finished = await step.do(`check ${engine} ${i}`, async () => {
-            const proc = await sandboxFor(this.env, jobId).getProcess(processId);
-            return !proc || !(proc.status === "running" || proc.status === "starting");
-          });
-        }
-        if (!finished) {
-          await step.do(`stop ${engine}`, async () => {
-            await sandboxFor(this.env, jobId).killProcess(processId).catch(() => {});
-          });
-        }
-
-        const attempt = await step.do(`collect ${engine}`, { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
-          const sandbox = sandboxFor(this.env, jobId);
-          const result = await sandbox
-            .readFile("/workspace/result.json")
-            .then((f) => JSON.parse(f.content) as JobResult)
-            .catch(() => null);
-          if (!result) {
-            return { ok: false, error: finished ? "The render stopped without a result" : "The render took too long", videoUrl: null, posterUrl: null, shareCopy: null, plan: null, metering: null };
-          }
-          let videoUrl: string | null = null;
-          let posterUrl: string | null = null;
-          if (result.ok && result.files.video) {
-            videoUrl = await this.store(sandbox, result.files.video, `jobs/${jobId}/brag.mp4`, "video/mp4");
-            if (result.files.poster) posterUrl = await this.store(sandbox, result.files.poster, `jobs/${jobId}/brag.jpg`, "image/jpeg");
-            if (result.files.workspace) await this.store(sandbox, result.files.workspace, `jobs/${jobId}/workspace.tgz`, "application/gzip");
-          }
-          return {
-            ok: Boolean(result.ok && videoUrl),
-            error: result.ok && videoUrl ? null : (result.error ?? "Render failed"),
-            videoUrl,
-            posterUrl,
-            shareCopy: result.shareCopy,
-            plan: result.plan,
-            metering: {
-              model: result.model,
-              numTurns: result.numTurns,
-              inputTokens: result.usage.input,
-              outputTokens: result.usage.output,
-              cacheReadTokens: result.usage.cacheRead,
-              cacheWriteTokens: result.usage.cacheWrite,
-              llmCostUsd: result.sdkReportedCostUsd || result.llmCostUsd,
-              computeSeconds: Math.round(result.durationMs / 1000),
-            },
-          };
+      // Each check is a request to the container, which also keeps it from idling out while it works.
+      let finished = false;
+      for (let i = 0; i < maxPolls && !finished; i++) {
+        await step.sleep(`wait ${engine} ${i}`, POLL_EVERY);
+        finished = await step.do(`check ${engine} ${i}`, async () => {
+          const proc = await sandboxFor(this.env, jobId).getProcess(processId);
+          return !proc || !(proc.status === "running" || proc.status === "starting");
         });
-
-        const { metering, ...rest } = attempt;
-        outcome = rest;
-        if (metering) {
-          totals.model = metering.model;
-          totals.numTurns += metering.numTurns;
-          totals.inputTokens += metering.inputTokens;
-          totals.outputTokens += metering.outputTokens;
-          totals.cacheReadTokens += metering.cacheReadTokens;
-          totals.cacheWriteTokens += metering.cacheWriteTokens;
-          totals.llmCostUsd += metering.llmCostUsd;
-          totals.computeSeconds += metering.computeSeconds;
-        }
-        // Only a provider problem (not a creative failure or a timeout) is worth a second engine.
-        if (outcome.ok || !finished || !isProviderFailure(outcome.error)) break;
       }
+      if (!finished) {
+        await step.do(`stop ${engine}`, async () => {
+          await sandboxFor(this.env, jobId).killProcess(processId).catch(() => {});
+        });
+      }
+
+      const attempt = await step.do(`collect ${engine}`, { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        const sandbox = sandboxFor(this.env, jobId);
+        const result = await sandbox
+          .readFile("/workspace/result.json")
+          .then((f) => JSON.parse(f.content) as JobResult)
+          .catch(() => null);
+        if (!result) {
+          return { ok: false, error: finished ? "The render stopped without a result" : "The render took too long", videoUrl: null, posterUrl: null, captionsUrl: null, shareCopy: null, plan: null, metering: null };
+        }
+        let videoUrl: string | null = null;
+        let posterUrl: string | null = null;
+        let captionsUrl: string | null = null;
+        if (result.ok && result.files.video) {
+          videoUrl = await this.store(sandbox, result.files.video, `jobs/${jobId}/brag.mp4`, "video/mp4");
+          if (result.files.poster) posterUrl = await this.store(sandbox, result.files.poster, `jobs/${jobId}/brag.jpg`, "image/jpeg");
+          if (result.files.captions) captionsUrl = await this.store(sandbox, result.files.captions, `jobs/${jobId}/captions.srt`, "application/x-subrip");
+          if (result.files.workspace) await this.store(sandbox, result.files.workspace, `jobs/${jobId}/workspace.tgz`, "application/gzip");
+        }
+        return {
+          ok: Boolean(result.ok && videoUrl),
+          error: result.ok && videoUrl ? null : (result.error ?? "Render failed"),
+          videoUrl,
+          posterUrl,
+          captionsUrl,
+          shareCopy: result.shareCopy,
+          plan: result.plan,
+          metering: {
+            model: result.model,
+            numTurns: result.numTurns,
+            inputTokens: result.usage.input,
+            outputTokens: result.usage.output,
+            cacheReadTokens: result.usage.cacheRead,
+            cacheWriteTokens: result.usage.cacheWrite,
+            llmCostUsd: result.sdkReportedCostUsd || result.llmCostUsd,
+            computeSeconds: Math.round(result.durationMs / 1000),
+          },
+        };
+      });
+
+      const { metering, ...outcome } = attempt;
 
       await step.do("finish job", async () => {
         const db = createDb(this.env.HYPERDRIVE.connectionString);
-        const metering = { ...(totals.model ? totals : {}), finishedAt: new Date() };
-        if (outcome?.ok) {
+        const done = { ...(metering ?? {}), finishedAt: new Date() };
+        if (outcome.ok) {
           await db.job.update({
             where: { id: jobId },
-            data: { ...metering, status: "SUCCEEDED", videoUrl: outcome.videoUrl, posterUrl: outcome.posterUrl, shareCopy: outcome.shareCopy, plan: outcome.plan },
+            data: { ...done, status: "SUCCEEDED", videoUrl: outcome.videoUrl, posterUrl: outcome.posterUrl, captionsUrl: outcome.captionsUrl, shareCopy: outcome.shareCopy, plan: outcome.plan },
           });
         } else {
-          await db.job.update({ where: { id: jobId }, data: { ...metering, status: "FAILED", error: redactSecrets(outcome?.error ?? "Render failed").slice(0, 2000) } });
+          await db.job.update({ where: { id: jobId }, data: { ...done, status: "FAILED", error: redactSecrets(outcome.error ?? "Render failed").slice(0, 2000) } });
           await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
         }
       });
@@ -303,26 +340,149 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
   }
 
   /**
+   * A reel: the upload goes from R2 into the container and runner/src/reel.ts edits it, with no agent. The outputs
+   * land under a video's names, so the media route and the video page work as they are. The upload is deleted once
+   * the reel is delivered; a failed reel keeps it for support until the bucket's uploads/ lifecycle rule clears it.
+   */
+  private async reel(jobId: string, job: { userId: string; creditsCost: number; watermark: boolean; reel: unknown }, step: WorkflowStep) {
+    const processId = "render-reel";
+    const reel = parseReel(job.reel);
+    let finished = false;
+    try {
+      if (!reel) throw new NonRetryableError("Upload missing: the job has no reel settings");
+      await step.do("start reel", { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        const sandbox = sandboxFor(this.env, jobId);
+        if (await sandbox.getProcess(processId)) return; // a previous attempt of this step already started it
+        const upload = await this.env.VIDEOS.get(reel.key);
+        if (!upload) throw new NonRetryableError(`Upload missing: ${reel.key}`);
+        const input = `input.${reel.key.split(".").pop()}`;
+        await sandbox.exec("rm -rf /workspace/out /workspace/work /workspace/result.json /workspace/input.*");
+        await sandbox.writeFile(`/workspace/${input}`, upload.body);
+        const spec: ReelSpec = {
+          jobId,
+          input,
+          options: { style: reel.style, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language },
+          // The container measures the real length: longer than the credits cover fails, and is refunded.
+          maxSeconds: reelSecondsFor(job.creditsCost) + 1,
+          watermark: job.watermark,
+          watermarkText: `Made with ${this.env.BRAND_NAME}`,
+          model: REEL_PLAN_MODEL,
+        };
+        await sandbox.writeFile("/workspace/reel.json", JSON.stringify(spec));
+        await sandbox.exec("chown -R agent:agent /workspace");
+        await sandbox.startProcess("runuser -u agent -- node /app/dist/reel.mjs", {
+          processId,
+          cwd: "/workspace",
+          env: {
+            HOME: "/home/agent",
+            JOB_ROOT: "/workspace",
+            // The edit plan and the word timings go to this Worker's virtual hosts; the container holds no keys.
+            OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`,
+            OPENAI_API_KEY: "added-by-worker",
+            HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`,
+            PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
+          },
+        });
+      });
+
+      for (let i = 0; i < REEL_MAX_POLLS && !finished; i++) {
+        await step.sleep(`wait reel ${i}`, REEL_POLL_EVERY);
+        finished = await step.do(`check reel ${i}`, async () => {
+          const proc = await sandboxFor(this.env, jobId).getProcess(processId);
+          return !proc || !(proc.status === "running" || proc.status === "starting");
+        });
+      }
+      if (!finished) {
+        await step.do("stop reel", async () => {
+          await sandboxFor(this.env, jobId).killProcess(processId).catch(() => {});
+        });
+      }
+
+      const attempt = await step.do("collect reel", { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        const sandbox = sandboxFor(this.env, jobId);
+        const result = await sandbox
+          .readFile("/workspace/result.json")
+          .then((f) => JSON.parse(f.content) as JobResult)
+          .catch(() => null);
+        if (!result) return { ok: false, error: finished ? "The reel stopped without a result" : "The reel took too long", media: null, plan: null, metering: null };
+        const media =
+          result.ok && result.files.video
+            ? {
+                videoUrl: await this.store(sandbox, result.files.video, `jobs/${jobId}/brag.mp4`, "video/mp4"),
+                posterUrl: result.files.poster ? await this.store(sandbox, result.files.poster, `jobs/${jobId}/brag.jpg`, "image/jpeg") : null,
+                captionsUrl: result.files.captions ? await this.store(sandbox, result.files.captions, `jobs/${jobId}/captions.srt`, "application/x-subrip") : null,
+              }
+            : null;
+        return {
+          ok: Boolean(media),
+          error: media ? null : (result.error ?? "Reel failed"),
+          media,
+          plan: result.plan,
+          metering: {
+            model: result.model,
+            numTurns: result.numTurns,
+            inputTokens: result.usage.input,
+            outputTokens: result.usage.output,
+            cacheReadTokens: result.usage.cacheRead,
+            cacheWriteTokens: result.usage.cacheWrite,
+            llmCostUsd: result.llmCostUsd,
+            computeSeconds: Math.round(result.durationMs / 1000),
+          },
+        };
+      });
+
+      await step.do("finish job", async () => {
+        const db = createDb(this.env.HYPERDRIVE.connectionString);
+        const done = { ...(attempt.metering ?? {}), finishedAt: new Date() };
+        if (attempt.media) {
+          await db.job.update({ where: { id: jobId }, data: { ...done, ...attempt.media, status: "SUCCEEDED", plan: attempt.plan } });
+        } else {
+          await db.job.update({ where: { id: jobId }, data: { ...done, status: "FAILED", error: redactSecrets(attempt.error ?? "Reel failed").slice(0, 2000) } });
+          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+        }
+      });
+      // The finished reel is what the customer keeps; their raw upload (up to 500 MB) goes.
+      if (attempt.media) {
+        await step.do("delete upload", async () => {
+          await this.env.VIDEOS.delete(reel.key);
+        });
+      }
+    } catch (err) {
+      // A step ran out of retries: fail the job and give the credits back. The message keeps its customer-facing
+      // prefix ("Upload missing: ...") for reelError().
+      await step.do("fail and refund", async () => {
+        const db = createDb(this.env.HYPERDRIVE.connectionString);
+        await db.job.update({ where: { id: jobId }, data: { status: "FAILED", error: redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 500), finishedAt: new Date() } });
+        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+      });
+    }
+
+    await step.do("destroy sandbox", async () => {
+      await sandboxFor(this.env, jobId).destroy();
+    });
+  }
+
+  /**
    * Downloads a private repo with the customer's saved GitHub token. The token is decrypted here, used for one
    * request to GitHub and dropped: it never reaches the container, a workflow step result or a log.
    */
   private async downloadPrivateRepo(userId: string, repoUrl: string): Promise<ReadableStream<Uint8Array>> {
     const db = createDb(this.env.HYPERDRIVE.connectionString);
     const saved = await db.repoToken.findUnique({ where: { userId } });
-    if (!saved) throw new NonRetryableError("Private repository: no GitHub token is saved (Settings → Private repositories)");
+    if (!saved) throw new NonRetryableError("Private repository: no GitHub token is saved (paste one under the repo link)");
     let token: string;
     try {
       const sealed = parseSealedToken(JSON.parse(saved.sealed));
       if (!sealed || !this.env.REPO_TOKEN_PRIVATE_KEY) throw new Error("unreadable");
       token = await openToken(sealed, userId, JSON.parse(this.env.REPO_TOKEN_PRIVATE_KEY) as RepoTokenJwk);
     } catch {
-      throw new NonRetryableError("Private repository: the saved GitHub token can't be read. Add it again in Settings.");
+      throw new NonRetryableError("Private repository: the saved GitHub token can't be read. Paste it again under the repo link.");
     }
     const [, owner, name] = new URL(repoUrl).pathname.split("/");
     const repo = `${owner}/${(name ?? "").replace(/\.git$/, "")}`;
     // GitHub answers with a redirect to a short-lived download link, which fetch follows without the token.
     const res = await fetch(`https://api.github.com/repos/${repo}/tarball`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "launchreel-render" },
+      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "hyped-render" },
     });
     if (res.status === 401 || res.status === 403 || res.status === 404) {
       throw new NonRetryableError(`Private repository: GitHub answered ${res.status}. Check that your saved token can read ${repo}.`);
@@ -342,8 +502,83 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
   }
 }
 
+/**
+ * Serves finished videos, posters and captions from R2 (with byte ranges, so players can seek), and nothing else:
+ * the bucket also holds each job's workspace, which can contain a customer's private repo, so it is never public.
+ * Production: media.hyped.video/jobs/…; workers.dev and local development: /media/jobs/….
+ */
+async function serveMedia(request: Request, env: Env, key: string): Promise<Response> {
+  if (!/^jobs\/[a-z0-9]+\/(brag\.mp4|brag\.jpg|captions\.srt)$/.test(key)) return new Response("Not found", { status: 404 });
+  const object = await env.VIDEOS.get(key, { range: request.headers, onlyIf: request.headers });
+  if (!object) return new Response("Not found", { status: 404 });
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("accept-ranges", "bytes");
+  headers.set("cache-control", "public, max-age=3600");
+  if (!("body" in object)) return new Response(null, { status: 304, headers }); // conditional request matched
+  const range = object.range as { offset?: number; length?: number } | undefined;
+  if (range && request.headers.has("range")) {
+    const start = range.offset ?? 0;
+    const end = start + (range.length ?? object.size - start) - 1;
+    headers.set("content-range", `bytes ${start}-${end}/${object.size}`);
+    return new Response(object.body, { status: 206, headers });
+  }
+  return new Response(object.body, { headers });
+}
+
+const UPLOAD_KEY = new RegExp(`^uploads/[\\w-]+/[\\w-]+\\.(${Object.values(REEL_UPLOAD_TYPES).join("|")})$`);
+
+/**
+ * Local development only: `next dev` has a local R2 of its own, so the web app sends reel uploads here, into the
+ * bucket this Worker's workflow reads (web/lib/reel-uploads.ts). Off unless DEV_START_TOKEN is set, like /dev/start.
+ */
+async function devUploads(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+  const op = url.pathname.slice("/dev/uploads/".length);
+  const body = request.method === "POST" ? ((await request.json().catch(() => ({}))) as { key?: string; uploadId?: string; contentType?: string; parts?: R2UploadedPart[] }) : {};
+  const key = body.key ?? url.searchParams.get("key") ?? "";
+  const uploadId = body.uploadId ?? url.searchParams.get("uploadId") ?? "";
+  if (!UPLOAD_KEY.test(key)) return new Response("Bad key", { status: 400 });
+  if (op === "create") return Response.json({ uploadId: (await env.VIDEOS.createMultipartUpload(key, { httpMetadata: { contentType: body.contentType } })).uploadId });
+  if (op === "part") {
+    const part = await env.VIDEOS.resumeMultipartUpload(key, uploadId).uploadPart(Number(url.searchParams.get("part")), await request.arrayBuffer());
+    return Response.json({ partNumber: part.partNumber, etag: part.etag });
+  }
+  if (op === "complete") return Response.json({ size: (await env.VIDEOS.resumeMultipartUpload(key, uploadId).complete(body.parts ?? [])).size });
+  if (op === "abort") {
+    await env.VIDEOS.resumeMultipartUpload(key, uploadId).abort();
+    return Response.json({ ok: true });
+  }
+  if (op === "head") {
+    // The first bytes too, so the web app can check the file really is a video.
+    const object = await env.VIDEOS.get(key, { range: { offset: 0, length: 16 } });
+    if (!object) return new Response("Not found", { status: 404 });
+    const start = [...new Uint8Array(await object.arrayBuffer())].map((b) => b.toString(16).padStart(2, "0")).join("");
+    return Response.json({ size: object.size, contentType: object.httpMetadata?.contentType ?? null, start });
+  }
+  if (op === "delete") {
+    await env.VIDEOS.delete(key);
+    return Response.json({ ok: true });
+  }
+  return new Response("Not found", { status: 404 });
+}
+
 export default {
-  async fetch() {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname.startsWith("/media/")) return serveMedia(request, env, decodeURIComponent(url.pathname.slice(7)));
+    if (request.method === "GET" && url.pathname.startsWith("/jobs/")) return serveMedia(request, env, decodeURIComponent(url.pathname.slice(1)));
+    if (url.pathname.startsWith("/dev/uploads/")) return devUploads(request, env, url);
+    // Local development only: the web app's `next dev` can't use the Workflow binding across Workers, so it asks
+    // here. Off unless DEV_START_TOKEN is set, which only happens in render/.dev.vars; production never has it.
+    if (request.method === "POST" && url.pathname === "/dev/start") {
+      if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+      const { jobId } = (await request.json().catch(() => ({}))) as { jobId?: string };
+      if (!jobId || !/^[a-z0-9]+$/.test(jobId)) return new Response("Bad job id", { status: 400 });
+      await env.VIDEO_JOBS.create({ id: jobId, params: { jobId } });
+      return Response.json({ ok: true });
+    }
     return new Response("render worker: ok");
   },
 

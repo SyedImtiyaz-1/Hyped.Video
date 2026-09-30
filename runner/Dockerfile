@@ -5,8 +5,9 @@
 FROM docker.io/cloudflare/sandbox:0.12.10
 
 # What brag-slim reaches for: FFmpeg, Python, git, fonts. Chromium comes from Playwright below.
+# Inter is the fallback typeface for scenes when a product's own web fonts can't be downloaded.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg python3 python3-numpy git fonts-dejavu-core fonts-noto-color-emoji \
+      ffmpeg python3 python3-numpy git fonts-dejavu-core fonts-noto-color-emoji fonts-inter \
     && rm -rf /var/lib/apt/lists/*
 
 # Headless Chromium plus its system libraries, at a fixed path the agent can find.
@@ -16,12 +17,17 @@ RUN npx -y playwright@1.55.0 install --with-deps chromium && chmod -R a+rx /ms-p
 # The OpenAI engine: the Codex CLI. npm pulls in its native linux-x64 binary as an optional dependency.
 RUN npm install -g --no-audit --no-fund @openai/codex@0.157.1
 
-# The job runner: the Claude Agent SDK, our bundled entry point, and the brag skills.
+# The job runner: the Claude Agent SDK, our bundled entry points (the runner, the voice tool and the reel editor), and the
+# brag skills.
 WORKDIR /app
 COPY package.container.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund
-COPY dist/run-job.mjs ./dist/run-job.mjs
+COPY dist/run-job.mjs dist/voice.mjs dist/reel.mjs ./dist/
 COPY skills ./skills
+# Licensed music (CC BY 4.0, credit waived) and sound effects (CC0) for the agent and the reel editor: see audio/README.md.
+COPY audio ./audio
+# The caption overlay the agent loads in voiceover scenes (copied into each workspace as .hyped/captions.js).
+COPY tools ./tools
 
 # The agent runs as an unprivileged user (Claude Code also refuses to bypass permissions as root).
 # CODEX_HOME must exist before Codex starts.

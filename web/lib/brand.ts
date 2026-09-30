@@ -1,6 +1,15 @@
-// Rename the product here. "LaunchReel" is a placeholder and already taken (see docs/PLAN.md).
+// The product's name and contact details, used across the site, emails and page titles.
 export const BRAND = {
-  name: "LaunchReel",
+  name: "Hyped",
+  domain: "hyped.video",
+  url: "https://hyped.video",
   tagline: "Launch videos made from your real product.",
-  supportEmail: "support@example.com",
+  supportEmail: "contact@hyped.video",
 };
+
+// Who runs Hyped, shown on the legal and contact pages. Keep it identical to the details given to Dodo Payments.
+export const BUSINESS = {
+  owner: "Syed Imtiyaz Ali",
+  address: ["Bhande Plot", "Nagpur, Maharashtra 440024", "India"],
+};
+export const BUSINESS_ADDRESS = BUSINESS.address.join(", ");

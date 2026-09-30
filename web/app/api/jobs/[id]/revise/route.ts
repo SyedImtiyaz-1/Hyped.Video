@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { creditsFor, grantCredits, spendCredits } from "@launchreel/core";
+import { creditsFor, grantCredits, spendCredits, type Quality } from "@launchreel/core";
 import { getDb, startRender } from "@/lib/db";
 import { isDemo } from "@/lib/demo";
+import { STUDIO_SOON_ERROR, studioAvailable } from "@/lib/studio";
 import { requireUser } from "@/lib/user";
 
 const Body = z.object({ change: z.string().min(3).max(1000) });
@@ -18,8 +19,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const db = await getDb();
   const parent = await db.job.findFirst({ where: { id, userId: user.id, status: "SUCCEEDED" } });
   if (!parent) return NextResponse.json({ error: "Video not found" }, { status: 404 });
+  // A reel re-runs from its upload, which is deleted once it's made; there's nothing to revise.
+  if (parent.kind === "reel") return NextResponse.json({ error: "Reels can't be revised. Upload the video again with the options you want." }, { status: 400 });
+  if (parent.quality === "studio" && !(await studioAvailable())) return NextResponse.json({ error: "Studio is coming soon, so Studio videos can't be revised right now." }, { status: 400 });
 
-  const cost = creditsFor("revision", parent.durationSec);
+  // A revision stays on its video's quality tier, so it renders on the same engine.
+  const cost = creditsFor("revision", parent.durationSec, parent.quality as Quality);
   const job = await db.job.create({
     data: {
       userId: user.id,
@@ -33,6 +38,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       creditsCost: cost,
       watermark: parent.watermark,
       privateRepo: parent.privateRepo,
+      videoType: parent.videoType,
+      music: parent.music,
+      brief: parent.brief ?? undefined,
+      quality: parent.quality,
+      voice: parent.voice,
+      captions: parent.captions,
     },
   });
   try {

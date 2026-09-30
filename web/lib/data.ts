@@ -20,11 +20,16 @@ export async function listVideos(userId: string, opts: { status?: StatusFilter; 
   const q = opts.q?.trim().toLowerCase() || undefined;
   const take = opts.take ?? 50;
   if (isDemo) {
-    return demoJobs().filter((j) => (!statuses || statuses.includes(j.status)) && (!q || j.sourceUrl.toLowerCase().includes(q))).slice(0, take);
+    return demoJobs().filter((j) => (!statuses || statuses.includes(j.status)) && (!q || [j.sourceUrl, j.notes, j.shareCopy].some((v) => v?.toLowerCase().includes(q)))).slice(0, take);
   }
   const db = await getDb();
   return db.job.findMany({
-    where: { userId, ...(statuses && { status: { in: statuses } }), ...(q && { sourceUrl: { contains: q, mode: "insensitive" as const } }) },
+    where: {
+      userId,
+      ...(statuses && { status: { in: statuses } }),
+      // Search matches the site or repo, the customer's notes and the share copy.
+      ...(q && { OR: [{ sourceUrl: { contains: q, mode: "insensitive" as const } }, { notes: { contains: q, mode: "insensitive" as const } }, { shareCopy: { contains: q, mode: "insensitive" as const } }] }),
+    },
     orderBy: { createdAt: "desc" },
     take,
   });

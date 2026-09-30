@@ -12,13 +12,22 @@
     "db:generate": "node node_modules/prisma/build/index.js generate --schema packages/core/prisma/schema.prisma",
     "keys": "node scripts/check-keys.mjs",
     "repo-keys": "node scripts/repo-token-keys.mjs",
+    "secrets": "node scripts/set-secrets.mjs",
+    "prod:db": "node scripts/prod-db.mjs",
+    "dodo": "node scripts/dodo-keys.mjs",
+    "dodo:sync": "node scripts/dodo-sync-packs.mjs",
+    "clerk": "node scripts/clerk-keys.mjs",
+    "voice-previews": "npm -w runner run voice-previews",
+    "dev:all": "node scripts/dev.mjs",
     "dev:web": "npm -w web run dev",
     "sync-skill": "node scripts/sync-skill.mjs",
     "measure": "npm -w runner run measure --",
     "demo": "npm -w web run dev:demo",
     "build:runner": "npm -w runner run build",
     "dev:render": "npm -w render run dev",
+    "dev:credits": "npm -w runner run dev:credits --",
+    "dev:reset": "node scripts/dev-reset.mjs",
     "deploy:render": "npm -w runner run build && npm -w render run deploy",
-    "deploy:web": "npm -w web run deploy"
+    "deploy:web": "node scripts/deploy-web.mjs"
   }
 }

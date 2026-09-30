@@ -6,7 +6,7 @@ This covers four things:
 3. How the system stays safe with untrusted input.
 4. How it stays cheap and profitable as it scales.
 
-Everything runs on Cloudflare except the Postgres database (Neon, reached through Hyperdrive) and the outside services: Clerk, Dodo Payments and the model providers (Anthropic by default, OpenAI as an option and automatic fallback). The diagrams are Mermaid, so they render on GitHub.
+Everything runs on Cloudflare except the Postgres database (Neon, reached through Hyperdrive) and the outside services: Clerk, Dodo Payments and the model providers (OpenAI for Standard videos, Anthropic for Studio). The diagrams are Mermaid, so they render on GitHub.
 
 **Status markers:**
 - ✅ built in this repo and checked in Cloudflare's local runtime
@@ -63,11 +63,11 @@ flowchart LR
 |---|---|---|---|
 | web Worker (`web/`) | Landing page, dashboard, admin. Job creation with a pre-flight check, revisions, checkout, billing portal, Dodo webhooks | Next.js 15 on Workers via OpenNext, Clerk | ✅ builds, boots and serves in workerd |
 | Database | Users, jobs, credit ledger, metering | Neon Postgres, via Hyperdrive, using Prisma with the `pg` driver adapter and one client per request | ✅ adapter verified; 🧪 against a live Neon database |
-| render Worker (`render/`) | `VideoJobWorkflow` (claim → pick engines → start → poll → collect → second engine if the provider failed → finish or refund → destroy), cron safety net | Workers + Workflows | ✅ bundles and boots; 🧪 end to end |
+| render Worker (`render/`) | `VideoJobWorkflow` (claim → pick the quality tier's engine → start → poll → collect → finish or refund → destroy), cron safety net | Workers + Workflows | ✅ bundles and boots; 🧪 end to end |
 | `VideoSandbox` | One container per video. Egress handlers for `anthropic.internal` and `openai.internal` | Cloudflare Sandbox SDK 0.12.10 (Containers), `standard-4` = 4 vCPU / 12 GiB / 20 GB | 🧪 image needs Docker to build |
 | Runner (`runner/`) | Inside the container: prepares the workspace, runs brag-slim on the chosen engine, watermarks free videos, writes `result.json` | Node 22, Claude Agent SDK, Codex CLI, Playwright Chromium, FFmpeg | ✅ bundles; 🧪 in a container |
 | Object storage | `brag.mp4`, `brag.jpg`, `workspace.tgz` for revisions | R2 bindings (no egress fees) with a public custom domain | 🧪 |
-| Payments | Hosted checkout, subscriptions, customer portal, tax as merchant of record | Dodo Payments | ✅ signature checks tested |
+| Payments | Hosted checkout for credit packs, customer portal, tax as merchant of record | Dodo Payments | ✅ signature checks tested |
 | Email | "Your video is ready", onboarding | Cloudflare Email Service | 🔜 Step 3 |
 | GitHub App | Release → draft video → approve → post | Webhooks into the web Worker | 🔜 Step 8 |
 
@@ -115,7 +115,7 @@ sequenceDiagram
 **Cost controls built into the pipeline:**
 - The pre-flight check rejects unreachable sites and private or missing repos before any tokens are spent.
 - Free videos run on each provider's cheaper model and are capped at 15 seconds.
-- Each attempt has a turn limit and a ~45-minute limit (in the workflow). On Claude the SDK also enforces a dollar ceiling, and a fallback attempt only gets what the first attempt left of it. Codex has no dollar ceiling, which is why the OpenAI engine defaults to `gpt-6-sol`, priced like Sonnet 5.
+- Each attempt has a turn limit and a ~45-minute limit (in the workflow). On Claude the SDK also enforces a dollar ceiling. Codex has no dollar ceiling, which is why the OpenAI engine defaults to `gpt-6-sol`, priced like Sonnet 5.
 - An orphaned container sleeps after 15 idle minutes, so it can't run up a bill.
 
 ## Payments and credits
@@ -128,26 +128,16 @@ sequenceDiagram
   participant D as Dodo Payments
   participant L as Credit ledger (Postgres)
 
-  U->>W: POST /api/checkout (item)
-  alt already subscribed
-    W->>D: subscriptions.changePlan (prorated)
-  else new purchase
-    W->>D: checkoutSessions.create (metadata.userId)
-    W-->>U: redirect to hosted checkout
-    U->>D: pays (Dodo handles tax and VAT)
-  end
+  U->>W: POST /api/checkout (credit pack)
+  W->>D: checkoutSessions.create (metadata.userId)
+  W-->>U: redirect to hosted checkout
+  U->>D: pays (Dodo handles tax and VAT)
   D->>W: signed webhook (Standard Webhooks)
   W->>W: verify signature, 401 if invalid
-  alt payment.succeeded (one-time)
-    W->>L: grant pack credits, key pay:payment_id
-  else subscription.active or renewed
-    W->>L: grant monthly credits, key sub:id:next_billing_date
-  else subscription.plan_changed (upgrade)
-    W->>L: grant the prorated difference
+  alt payment.succeeded
+    W->>L: grant the pack's credits, key pay:payment_id
   else refund.succeeded or dispute.opened
     W->>L: revoke unspent credits, never below zero
-  else subscription.cancelled or expired
-    W->>L: plan becomes FREE, paid credits stay
   end
 ```
 
@@ -248,16 +238,16 @@ The key design choice: the agent in the container is pointed at virtual hosts. C
 
 - A video takes 10–20 minutes, so **one container makes about 4 videos an hour**.
 - `max_instances` (20 to start) caps how many render at once. The account limit is far higher: 1,500 concurrent vCPU.
-- **Model provider rate limits are the real ceiling.** Twenty renders at once is roughly 100+ requests and ~120k output tokens per minute. Request an increase at least 2 weeks before launch, and match `max_instances` to it. The OpenAI fallback adds headroom when Anthropic returns 429s or has an outage.
+- **Model provider rate limits are the real ceiling.** Twenty renders at once is roughly 100+ requests and ~120k output tokens per minute. Request an increase at least 2 weeks before launch, and match `max_instances` to it. Each tier draws on its own provider's limits: OpenAI for Standard, Anthropic for Studio.
 - **Compute cost:** about $0.00011 per second on `standard-4`, so about $0.10 for a 15-minute render. That's small next to about $2–5 of model tokens.
-- **Workflows:** up to 10,000 steps per instance (a job uses about 70, or about 140 when it falls back to the second engine) and tens of thousands of concurrent instances.
+- **Workflows:** up to 10,000 steps per instance (a job uses about 70) and tens of thousands of concurrent instances.
 
 ## Observability and cost control
 
-- **Per job (✅, `Job` table):** model, turns, input/output/cache tokens, dollars, render minutes, attempts. After a fallback, the job shows the second engine's model and the cost of both attempts added together.
+- **Per job (✅, `Job` table):** model, turns, input/output/cache tokens, dollars, render minutes, attempts. `quality` records the tier, and so the engine.
 - **`/dashboard/admin` (✅):** cost per delivered video (failures included), p90 cost, failure rate, margin per plan.
 - **Cloudflare observability** is enabled on both Workers: logs and traces for every request and workflow step.
-- **Alerts (🔜):** p90 cost over $8, failure rate over 15%, renders waiting longer than 20 minutes, webhook failures, provider 429s, how often jobs fall back to the second engine.
+- **Alerts (🔜):** p90 cost over $8, failure rate over 15%, renders waiting longer than 20 minutes, webhook failures, provider 429s, Studio failures (a bad Anthropic key fails every Studio video).
 
 ## Failure modes
 
@@ -270,7 +260,7 @@ The key design choice: the agent in the container is pointed at virtual hosts. C
 | Workflow dies entirely | The cron job every 10 minutes refunds jobs stuck RUNNING over 120 minutes (room for two engine attempts) or QUEUED over 30, and destroys their containers |
 | Deploy during renders | In-flight containers get up to 40 minutes to finish |
 | Dodo webhook duplicated or out of order | Idempotent ledger keys; plan state comes from each event's subscription object |
-| Provider outage, rate limit or bad key | The agent's own client retries first: Claude gets 6 retries (about 40 seconds) when a fallback is waiting, or its full ~3 minutes on the last engine. If the job still fails for a provider reason, it runs once more on the other engine in the same container. Only then is it refunded. Pause the free tier first |
+| Provider outage, rate limit or bad key | The agent's own client retries first (Claude for about 3 minutes). There is no fallback to the other engine: the job fails and is refunded, and only that tier's videos are affected. Pause the free tier first |
 
 ## Evolution
 

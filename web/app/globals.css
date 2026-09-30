@@ -5,6 +5,10 @@
 /* Geist design tokens (vercel.com/geist/colors), light and dark. */
 :root {
   color-scheme: light;
+  /* Hyped brand: neon lime on near-black. Used only for primary actions and small highlights. */
+  --ds-brand: #c8f135;
+  --ds-brand-hover: #d6f76a;
+  --ds-brand-ink: #0a0a0a;
   --ds-background-100: hsla(0, 0%, 100%, 1);
   --ds-background-200: hsla(0, 0%, 98%, 1);
   --ds-gray-100: hsla(0, 0%, 95%, 1);
@@ -204,6 +208,9 @@
   --color-current: currentColor;
   --color-white: #fff;
   --color-black: #000;
+  --color-brand: var(--ds-brand);
+  --color-brand-hover: var(--ds-brand-hover);
+  --color-brand-ink: var(--ds-brand-ink);
   --color-background-100: var(--ds-background-100);
   --color-background-200: var(--ds-background-200);
   --color-gray-100: var(--ds-gray-100);
@@ -298,6 +305,7 @@
   --color-pink-1000: var(--ds-pink-1000);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow-neon: 0 0 0 1px rgb(200 241 53 / 0.35), 0 8px 28px -6px rgb(200 241 53 / 0.55);
   --shadow-menu: 0 0 0 1px var(--ds-gray-alpha-400), 0 4px 8px -4px rgba(0, 0, 0, 0.04), 0 16px 24px -8px rgba(0, 0, 0, 0.06);
   --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
   @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -316,8 +324,8 @@
     @apply border-gray-alpha-400;
   }
   ::selection {
-    background: var(--ds-blue-700);
-    color: white;
+    background: var(--ds-brand);
+    color: var(--ds-brand-ink);
   }
   :focus-visible {
     outline: 2px solid var(--ds-blue-700);

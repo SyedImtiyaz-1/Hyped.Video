@@ -21,6 +21,17 @@ export const getDb = cache(async () => {
 
 /** Starts the durable render workflow for a job (render Worker, bound as VIDEO_JOBS). */
 export async function startRender(jobId: string) {
+  // Local development: `next dev` can't reach another Worker's Workflow through the binding, so it asks the local
+  // render Worker to start it. DEV_RENDER_URL and DEV_START_TOKEN only exist in the local .env files.
+  if (process.env.NODE_ENV === "development" && process.env.DEV_RENDER_URL) {
+    const res = await fetch(`${process.env.DEV_RENDER_URL}/dev/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-dev-start-token": process.env.DEV_START_TOKEN ?? "" },
+      body: JSON.stringify({ jobId }),
+    }).catch(() => null);
+    if (!res?.ok) throw new Error("The local render Worker didn't start the job. Is `npm run dev:render` running?");
+    return;
+  }
   const { env } = await getCloudflareContext({ async: true });
   await env.VIDEO_JOBS.create({ id: jobId, params: { jobId } });
 }

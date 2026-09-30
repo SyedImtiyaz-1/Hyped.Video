@@ -37,6 +37,7 @@ enum JobStatus {
 enum SourceType {
   WEBSITE
   GITHUB
+  UPLOAD // the customer's own video (reels)
 }
 
 model Job {
@@ -44,8 +45,9 @@ model Job {
   userId       String
   user         User       @relation(fields: [userId], references: [id])
   status       JobStatus  @default(QUEUED)
+  kind         String     @default("video") // video | reel (the customer's own video, captioned and edited)
   sourceType   SourceType
-  sourceUrl    String
+  sourceUrl    String     // the website or repo; for reels, the uploaded file's name
   tone         String?
   format       String     @default("landscape")
   durationSec  Int        @default(20)
@@ -54,9 +56,18 @@ model Job {
   creditsCost  Int
   watermark    Boolean    @default(false)
   privateRepo  Boolean    @default(false) // GitHub source fetched with the customer's saved token
+  videoType    String     @default("launch") // launch | demo | feature
+  music        String     @default("upbeat") // upbeat | composed | none
+  brief        Json?      // optional guided brief: { launching, audience, highlights[], cta }
+  quality      String     @default("standard") // standard | studio: the tier picks the engine (render/wrangler.jsonc)
+  voice        String?    // voiceover voice id (packages/core/src/voices.ts); null means no voiceover
+  captions     Boolean    @default(true) // with a voiceover: captions burned into the video
+  template     String?    // the template the video started from (packages/core/src/templates.ts), if any
+  reel         Json?      // reels: the options and the upload ({ style, emojis, zooms, sfx, hook, language, key, fileName, ... }; ReelJob in packages/core/src/reel.ts)
 
   videoUrl     String?
   posterUrl    String?
+  captionsUrl  String?    // SRT captions, for videos with a voiceover and for reels
   shareCopy    String?
   plan         String?    // brag-plan.md, shown to the customer
   error        String?

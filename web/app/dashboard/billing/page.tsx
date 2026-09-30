@@ -1,63 +1,55 @@
 import { Check, Info, Receipt } from "lucide-react";
-import { CREDIT_COST, PACK_1, PLANS, type PlanId } from "@launchreel/core";
-import { Badge } from "@/components/ui/badge";
+import { PACKS, type PackKey } from "@launchreel/core";
+import { CreditTable } from "@/components/credit-table";
+import { PackCards, PriceNote, RECOMMENDED } from "@/components/pricing/pack-cards";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { PageBody, PageHeader, SectionTitle } from "@/components/ui/page";
-import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/cn";
+import { plural } from "@/lib/format";
+import { visitorCurrency } from "@/lib/region";
+import { studioAvailable } from "@/lib/studio";
 import { requireUser } from "@/lib/user";
 
 export const metadata = { title: "Billing" };
 export const dynamic = "force-dynamic";
 
-const PAID: Exclude<PlanId, "FREE">[] = ["STARTER", "PRO", "AGENCY"];
+const PERKS = ["Pay once, no subscription", "Failed renders refunded", "Secure checkout by Dodo Payments"];
 
-const PERKS: Record<Exclude<PlanId, "FREE">, string[]> = {
-  STARTER: ["No watermark", "All tones and formats", "Revisions for 1 credit"],
-  PRO: ["Priority rendering", "Brand kit (soon)", "GitHub release videos (soon)"],
-  AGENCY: ["Top-priority rendering", "White-label share pages (soon)", "Client workspaces and API (soon)"],
-};
-
-export default async function BillingPage({ searchParams }: { searchParams: Promise<{ plan?: string; demo?: string; paid?: string }> }) {
+export default async function BillingPage({ searchParams }: { searchParams: Promise<{ pack?: string; demo?: string; paid?: string; currency?: string }> }) {
   const params = await searchParams;
   const user = await requireUser();
-  const current = PLANS[user.plan];
+  // The pricing page links here with ?pack=… to highlight the pack the visitor picked.
+  const picked = params.pack && params.pack in PACKS ? (params.pack as PackKey) : RECOMMENDED;
+  const [currency, studio] = await Promise.all([visitorCurrency(params.currency), studioAvailable()]);
 
   return (
     <>
-      <PageHeader title="Billing" description="Plans, credits and invoices. Payments are handled by Dodo Payments, our merchant of record." />
+      <PageHeader title="Billing" description="Buy credits when you need them: no subscription, and credits never expire. Payments are handled by Dodo Payments, our merchant of record." />
       <PageBody className="space-y-8">
-        {params.demo && (
-          <Notice>Demo mode: checkout and the billing portal are disabled.</Notice>
-        )}
+        {params.demo && <Notice>Demo mode: checkout and the billing portal are disabled.</Notice>}
         {params.paid && <Notice tone="success">Payment received. Your credits appear here within a few seconds.</Notice>}
 
         <Card>
-          <CardHeader title="Current plan" actions={<Badge tone={user.plan === "FREE" ? "gray" : "blue"} size="md">{current.name}</Badge>} />
-          <CardContent className="grid gap-6 md:grid-cols-3">
-            <div>
-              <p className="text-[13px] text-gray-900">Price</p>
-              <p className="mt-1 text-xl font-semibold tracking-tight">{current.priceUsd ? `$${current.priceUsd}/month` : "Free"}</p>
-            </div>
-            <div>
-              <p className="text-[13px] text-gray-900">Included each month</p>
-              <p className="mt-1 text-xl font-semibold tracking-tight">{current.creditsPerMonth ? `${current.creditsPerMonth} credits` : "1 trial video"}</p>
-            </div>
+          <CardHeader title="Your credits" />
+          <CardContent className="grid gap-6 md:grid-cols-2">
             <div>
               <p className="text-[13px] text-gray-900">Credits left</p>
               <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight">{user.credits}</p>
-              <Progress className="mt-2" value={user.credits / Math.max(current.creditsPerMonth, user.credits, 1)} />
+            </div>
+            <div>
+              <p className="text-[13px] text-gray-900">Enough for</p>
+              <p className="mt-1 text-xl font-semibold tracking-tight">{plural(user.credits, "short video")}</p>
             </div>
           </CardContent>
           <CardFooter>
             <span className="flex items-center gap-2">
               <Receipt className="size-4" />
-              Invoices, payment method and cancellation live in the billing portal.
+              Invoices and receipts live in the billing portal.
             </span>
             {user.billingCustomerId ? (
               <form action="/api/billing/portal" method="post">
-                <Button size="sm">Manage billing</Button>
+                <Button size="sm">Open billing portal</Button>
               </form>
             ) : (
               <span className="text-[13px]">Available after your first purchase</span>
@@ -66,59 +58,23 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
         </Card>
 
         <section>
-          <SectionTitle>Plans</SectionTitle>
-          <div className="grid gap-4 lg:grid-cols-3">
-            {PAID.map((id) => {
-              const plan = PLANS[id];
-              const isCurrent = user.plan === id;
-              const highlighted = params.plan === id && !isCurrent;
-              return (
-                <Card key={id} className={cn("flex flex-col", highlighted && "border-blue-700 ring-1 ring-blue-700", isCurrent && "border-gray-1000")}>
-                  <CardContent className="flex flex-1 flex-col">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-base font-semibold">{plan.name}</h3>
-                      {isCurrent && <Badge tone="inverted">Current</Badge>}
-                    </div>
-                    <p className="mt-3">
-                      <span className="text-3xl font-semibold tracking-[-0.04em]">${plan.priceUsd}</span>
-                      <span className="text-sm text-gray-900">/month</span>
-                    </p>
-                    <p className="mt-1 text-sm text-gray-900">
-                      {plan.creditsPerMonth / CREDIT_COST.newVideo} videos a month · {plan.creditsPerMonth} credits
-                    </p>
-                    <ul className="mt-5 flex-1 space-y-2 text-sm">
-                      {PERKS[id].map((perk) => (
-                        <li key={perk} className="flex items-center gap-2">
-                          <Check className="size-4 shrink-0" />
-                          {perk}
-                        </li>
-                      ))}
-                    </ul>
-                    <form action="/api/checkout" method="post" className="mt-6">
-                      <input type="hidden" name="item" value={id} />
-                      <Button variant={highlighted || (!isCurrent && id === "PRO") ? "primary" : "secondary"} className="w-full" disabled={isCurrent}>
-                        {isCurrent ? "Current plan" : user.billingSubscriptionId ? `Switch to ${plan.name}` : `Choose ${plan.name}`}
-                      </Button>
-                    </form>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+          <SectionTitle>Buy credits</SectionTitle>
+          <PackCards currency={currency} checkout highlight={picked} />
+          <PriceNote currency={currency} className="mt-3" />
+          <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-900">
+            {PERKS.map((perk) => (
+              <li key={perk} className="flex items-center gap-2">
+                <Check className="size-4 shrink-0 text-gray-1000" />
+                {perk}
+              </li>
+            ))}
+          </ul>
         </section>
 
         <Card>
-          <CardContent className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h3 className="text-base font-semibold">Just one video</h3>
-              <p className="mt-1 text-sm text-gray-900">
-                ${PACK_1.priceUsd} for {PACK_1.credits} credits, enough for one new video. No subscription.
-              </p>
-            </div>
-            <form action="/api/checkout" method="post">
-              <input type="hidden" name="item" value="PACK_1" />
-              <Button>Buy one video</Button>
-            </form>
+          <CardHeader title="How credits work" description="1 credit makes one Standard video up to 30 seconds. A revision costs half, rounded up." />
+          <CardContent>
+            <CreditTable studioSoon={!studio} />
           </CardContent>
         </Card>
       </PageBody>

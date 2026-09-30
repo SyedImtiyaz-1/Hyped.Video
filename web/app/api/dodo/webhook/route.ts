@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
-import { PLANS, PRODUCTS, grantCredits, revokeCredits, type Db } from "@launchreel/core";
+import { PACKS, grantCredits, revokeCredits, type Db } from "@launchreel/core";
 import { getDb } from "@/lib/db";
-import { dodo, planFor, productKeyFor } from "@/lib/dodo";
+import { dodo, packFor } from "@/lib/dodo";
 
 type DodoEvent = ReturnType<ReturnType<typeof dodo>["webhooks"]["unwrap"]>;
 
-// Subscribe the Dodo webhook to: payment.succeeded, subscription.active, subscription.renewed,
-// subscription.plan_changed, subscription.cancelled, subscription.expired, subscription.failed,
-// refund.succeeded, dispute.opened, dispute.won.
+// Subscribe the Dodo webhook to: payment.succeeded, refund.succeeded, dispute.opened, dispute.won.
+// Credits come only from one-time packs; there are no subscriptions.
 // Every grant is keyed so retries and duplicate events never double-credit.
 export async function POST(req: Request) {
   const body = await req.text();
@@ -21,57 +20,20 @@ export async function POST(req: Request) {
   const db = await getDb();
 
   switch (event.type) {
-    // One-time purchases. Subscription charges also emit this event, but plan credits come from
-    // subscription.active / subscription.renewed below.
+    // A credit pack was paid for.
     case "payment.succeeded": {
       const p = event.data;
-      if (p.subscription_id || p.subscription_ids.length) break;
+      if (p.subscription_id || p.subscription_ids.length) break; // we sell no subscriptions
       const userId = await resolveUser(db, p.metadata, p.customer);
       if (!userId) break;
       const lines = p.product_cart ?? [];
       const credits = lines.reduce((sum, line) => {
-        const key = productKeyFor(line.product_id);
-        const product = key ? PRODUCTS[key] : undefined;
-        return sum + (product?.kind === "one_time" ? product.credits * line.quantity : 0);
+        const key = packFor(line.product_id);
+        return sum + (key ? PACKS[key].credits * line.quantity : 0);
       }, 0);
-      await grantCredits(db, userId, credits, `purchase:${lines.map((l) => productKeyFor(l.product_id) ?? l.product_id).join("+")}`, `pay:${p.payment_id}`);
-      break;
-    }
-
-    // First charge and every renewal: one month of credits per paid period.
-    case "subscription.active":
-    case "subscription.renewed": {
-      const sub = event.data;
-      if (event.type === "subscription.active" && sub.trial_period_days > 0) break; // nothing paid yet
-      const plan = planFor(sub.product_id);
-      const userId = plan && (await resolveUser(db, sub.metadata, sub.customer));
-      if (!plan || !userId) break;
-      await db.user.update({ where: { id: userId }, data: { plan, billingSubscriptionId: sub.subscription_id } });
-      await grantCredits(db, userId, PLANS[plan].creditsPerMonth, `subscription:${plan}`, `sub:${sub.subscription_id}:${sub.next_billing_date}`);
-      break;
-    }
-
-    // Upgrade mid-cycle: top up the difference for the rest of the period. Downgrades take effect at renewal.
-    case "subscription.plan_changed": {
-      const sub = event.data;
-      const plan = planFor(sub.product_id);
-      const userId = plan && (await resolveUser(db, sub.metadata, sub.customer));
-      if (!plan || !userId) break;
-      const before = await db.user.findUniqueOrThrow({ where: { id: userId } });
-      await db.user.update({ where: { id: userId }, data: { plan, billingSubscriptionId: sub.subscription_id } });
-      const periodLeft = Math.min(1, Math.max(0, new Date(sub.next_billing_date).getTime() - Date.now()) / (30 * 86400_000));
-      const extra = Math.ceil((PLANS[plan].creditsPerMonth - PLANS[before.plan].creditsPerMonth) * periodLeft);
-      await grantCredits(db, userId, extra, `upgrade:${plan}`, `planchange:${webhookId}`);
-      break;
-    }
-
-    // Plan ends. Credits already granted stay: they were paid for.
-    case "subscription.cancelled":
-    case "subscription.expired":
-    case "subscription.failed": {
-      const sub = event.data;
-      if (sub.status === "active") break; // cancellation scheduled for the end of the period
-      await db.user.updateMany({ where: { billingSubscriptionId: sub.subscription_id }, data: { plan: "FREE", billingSubscriptionId: null } });
+      // "purchase:CREATOR", with "@INR" when paid in rupees, so /admin can count revenue in the right currency.
+      const packs = lines.map((l) => packFor(l.product_id) ?? l.product_id).join("+");
+      await grantCredits(db, userId, credits, `purchase:${packs}${p.currency && p.currency !== "USD" ? `@${p.currency}` : ""}`, `pay:${p.payment_id}`);
       break;
     }
 
@@ -112,13 +74,7 @@ async function resolveUser(db: Db, metadata: Record<string, unknown> | null | un
 }
 
 async function revokeForPayment(db: Db, paymentId: string, ref: string) {
-  // One-time purchase: the ledger knows exactly what it granted.
+  // The ledger knows exactly what that payment granted.
   const grant = await db.creditEntry.findUnique({ where: { paymentRef: `pay:${paymentId}` } });
-  if (grant) return revokeCredits(db, grant.userId, grant.delta, `revoke:${paymentId}`, ref);
-  // Subscription charge: take back the latest monthly grant.
-  const payment = await dodo().payments.retrieve(paymentId);
-  const userId = await resolveUser(db, payment.metadata, payment.customer);
-  if (!userId) return 0;
-  const last = await db.creditEntry.findFirst({ where: { userId, reason: { startsWith: "subscription:" } }, orderBy: { createdAt: "desc" } });
-  return last ? revokeCredits(db, userId, last.delta, `revoke:${paymentId}`, ref) : 0;
+  return grant ? revokeCredits(db, grant.userId, grant.delta, `revoke:${paymentId}`, ref) : 0;
 }

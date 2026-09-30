@@ -4,6 +4,7 @@ node_modules
 !.env.example
 .dev.vars
 .next
+.next-demo
 dist
 runner/dist
 render/.wrangler
@@ -16,3 +17,5 @@ measurements
 # used in production. Update the vendored copy with: npm run sync-skill
 runner/skills/brag/
 *.tsbuildinfo
+# Local scratch folders (throwaway tools), never committed
+.tmp-*/

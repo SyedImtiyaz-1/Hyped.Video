@@ -5,6 +5,7 @@
 //   npm run measure -- https://linear.app https://github.com/owner/repo
 //   npm run measure -- --duration 90 https://yourproduct.com     # a full 90s launch video (default 20s)
 //   npm run measure -- --format vertical https://yourproduct.com  # landscape (default), vertical or square
+//   npm run measure -- --type demo --music upbeat https://yourproduct.com  # launch | demo | feature; upbeat | composed | none
 //   CLAUDE_MODEL=claude-sonnet-5 npm run measure     # compare Claude models
 //   ENGINE=openai OPENAI_MODEL=gpt-6-sol npm run measure   # the OpenAI (Codex) engine
 import { COMPUTE_USD_PER_SECOND, STORAGE_USD_PER_VIDEO } from "@launchreel/core/pricing";
@@ -26,18 +27,20 @@ const option = (flag: string) => {
 };
 const durationSec = Number(option("--duration") ?? 20);
 const format = option("--format") ?? "landscape";
-const suffix = `-${format}-${durationSec}s`;
+const videoType = (option("--type") ?? "launch") as BragRequest["videoType"];
+const music = (option("--music") ?? "upbeat") as BragRequest["music"];
+const suffix = `-${videoType}-${format}-${durationSec}s`;
 const cases: { name: string; req: BragRequest }[] = args.length
   ? args.map((url) => ({
       name: url.replace(/^https?:\/\//, "").replace(/[^a-z0-9]+/gi, "-") + suffix,
-      req: { source: { type: url.includes("github.com") ? "GITHUB" : "WEBSITE", url }, durationSec, format },
+      req: { source: { type: url.includes("github.com") ? "GITHUB" : "WEBSITE", url }, durationSec, format, videoType, music },
     }))
-  : readdirSync(EXAMPLES).map((name) => ({ name: name + suffix, req: { source: { type: "LOCAL", url: join(EXAMPLES, name) }, durationSec, format } }));
+  : readdirSync(EXAMPLES).map((name) => ({ name: name + suffix, req: { source: { type: "LOCAL", url: join(EXAMPLES, name) }, durationSec, format, videoType, music } }));
 
 mkdirSync(OUT, { recursive: true });
 const engine = parseEngine(process.env.ENGINE);
 const model = engine === "openai" ? (process.env.OPENAI_MODEL ?? "gpt-6-sol") : (process.env.CLAUDE_MODEL ?? "claude-opus-5-5");
-console.log(`engine=${engine} model=${model} format=${format} duration=${durationSec}s`);
+console.log(`engine=${engine} model=${model} type=${videoType} music=${music} format=${format} duration=${durationSec}s`);
 writeFileSync(csv, "case,engine,model,ok,turns,input,output,cache_read,cache_write,llm_usd,sdk_usd,minutes,compute_usd,total_cogs_usd,error\n");
 
 const run = (cmd: string, a: string[], cwd: string) => execFileSync(cmd, a, { cwd, stdio: "pipe" });

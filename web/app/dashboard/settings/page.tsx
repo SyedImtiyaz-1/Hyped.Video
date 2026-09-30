@@ -1,32 +1,26 @@
 import { Bell, KeyRound, Palette } from "lucide-react";
+import { LogOutButton } from "@/components/shell/log-out-button";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { PageBody, PageHeader } from "@/components/ui/page";
 import { BRAND } from "@/lib/brand";
-import { getDb } from "@/lib/db";
 import { isDemo } from "@/lib/demo";
 import { formatDateTime } from "@/lib/format";
-import { getRepoTokenPublicKey } from "@/lib/repo-token-key";
 import { requireUser } from "@/lib/user";
-import { PrivateRepos } from "./private-repos";
 
 export const metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const user = await requireUser();
-  const [publicKey, saved] = await Promise.all([
-    getRepoTokenPublicKey(),
-    isDemo ? null : getDb().then((db) => db.repoToken.findUnique({ where: { userId: user.id }, select: { hint: true, createdAt: true, lastUsedAt: true } })),
-  ]);
   return (
     <>
       <PageHeader narrow title="Settings" description="Your account, notifications and integrations." />
       <PageBody className="max-w-[880px] space-y-6">
         <Card>
-          <CardHeader title="Account" description="Sign-in methods and profile are managed from the account menu in the sidebar." />
+          <CardHeader title="Account" description="Manage sign-in methods and your profile from the account menu: your picture, at the top on phones and at the bottom of the sidebar on larger screens." />
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <div>
               <Label htmlFor="email">Email</Label>
@@ -37,14 +31,13 @@ export default async function SettingsPage() {
               <Input id="since" value={formatDateTime(user.createdAt)} readOnly disabled />
             </div>
           </CardContent>
+          {!isDemo && (
+            <CardFooter>
+              <span>Log out of {BRAND.name} on this device.</span>
+              <LogOutButton />
+            </CardFooter>
+          )}
         </Card>
-
-        <PrivateRepos
-          userId={user.id}
-          publicKey={publicKey}
-          saved={saved && { hint: saved.hint, createdAt: saved.createdAt.toISOString(), lastUsedAt: saved.lastUsedAt?.toISOString() ?? null }}
-          demo={isDemo}
-        />
 
         <SoonCard icon={<Bell />} title="Notifications" description="Email me when a video is ready or a render fails." />
         <SoonCard icon={<Palette />} title="Brand kit" description="Upload your logo, colors, fonts and voice once. Every video uses them." />

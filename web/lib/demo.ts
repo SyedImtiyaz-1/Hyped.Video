@@ -16,17 +16,17 @@ const SAMPLE = "https://latent-spaces.github.io/brag/examples";
 export const demoUser = (): User => ({
   id: DEMO_USER_ID,
   email: "you@example.com",
-  credits: 17,
-  plan: "PRO",
+  credits: 14, // the demo ledger: 5 trial + 3 + 12 bought + 1 refunded − 7 used
+  plan: "FREE",
   billingCustomerId: "cus_demo",
-  billingSubscriptionId: "sub_demo",
+  billingSubscriptionId: null,
   createdAt: ago(60 * 24 * 21),
 });
 
 function job(fields: Partial<Job> & Pick<Job, "id" | "status" | "sourceType" | "sourceUrl" | "createdAt">): Job {
   return {
     userId: DEMO_USER_ID, tone: null, format: "landscape", durationSec: 20, notes: null, parentJobId: null,
-    creditsCost: 2, watermark: false, privateRepo: false, videoUrl: null, posterUrl: null, shareCopy: null, plan: null, error: null,
+    creditsCost: 1, watermark: false, privateRepo: false, videoType: "launch", music: "upbeat", brief: null, quality: "standard", voice: null, captions: true, template: null, kind: "video", reel: null, captionsUrl: null, videoUrl: null, posterUrl: null, shareCopy: null, plan: null, error: null,
     model: "claude-opus-5-5", numTurns: null, inputTokens: null, outputTokens: null, cacheReadTokens: null,
     cacheWriteTokens: null, llmCostUsd: null, computeSeconds: null, attempts: 1, startedAt: null, finishedAt: null,
     ...fields,
@@ -84,17 +84,17 @@ const entry = (id: string, delta: number, reason: string, minutesAgo: number): C
   id, userId: DEMO_USER_ID, delta, reason, paymentRef: null, createdAt: ago(minutesAgo),
 });
 
-// Sums to demoUser.credits (17).
+// Sums to demoUser.credits (11).
 export const demoLedger = (): CreditEntry[] => [
-  entry("l11", -2, "job:cmgk2h9q1rocket2", 1),
-  entry("l10", -2, "job:cmgk2h8n4orbit01", 6),
+  entry("l11", -1, "job:cmgk2h9q1rocket2", 1),
+  entry("l10", -1, "job:cmgk2h8n4orbit01", 6),
   entry("l09", -1, "job:cmgk1z7taxirev03", 70),
-  entry("l08", -2, "job:cmgk1x2taxi00004", 95),
-  entry("l07", -2, "job:cmgjzr4horse0005", 60 * 26),
-  entry("l06", 2, "refund:cmgjyq8pixel0006", 60 * 30 - 24),
-  entry("l05", -2, "job:cmgjyq8pixel0006", 60 * 30),
-  entry("l04", -2, "job:cmgjw1bfish00007", 60 * 24 * 3),
-  entry("l03", 24, "subscription:PRO", 60 * 24 * 7),
-  entry("l02", 2, "purchase:PACK_1", 60 * 24 * 14),
-  entry("l01", 2, "signup_trial", 60 * 24 * 21),
+  entry("l08", -1, "job:cmgk1x2taxi00004", 95),
+  entry("l07", -1, "job:cmgjzr4horse0005", 60 * 26),
+  entry("l06", 1, "refund:cmgjyq8pixel0006", 60 * 30 - 24),
+  entry("l05", -1, "job:cmgjyq8pixel0006", 60 * 30),
+  entry("l04", -1, "job:cmgjw1bfish00007", 60 * 24 * 3),
+  entry("l03", 12, "purchase:CREATOR", 60 * 24 * 7),
+  entry("l02", 3, "purchase:STARTER", 60 * 24 * 14),
+  entry("l01", 5, "signup_trial", 60 * 24 * 21),
 ];

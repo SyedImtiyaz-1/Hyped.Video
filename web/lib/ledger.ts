@@ -1,22 +1,30 @@
-const cap = (s = "") => s.charAt(0) + s.slice(1).toLowerCase();
+import { PACKS, type PackKey } from "@launchreel/core/pricing";
 
-/** Turns a ledger reason ("job:<id>", "subscription:PRO", ...) into something a customer understands. */
+/**
+ * The packs in a purchase reason: "CREATOR", "STARTER+CREATOR" for a cart with several packs, and "@INR" at the end
+ * when it was paid in rupees.
+ */
+export function purchasedPacks(ref: string): { keys: PackKey[]; currency: string } {
+  const [keys, currency = "USD"] = ref.split("@");
+  return { keys: keys.split("+").filter((k): k is PackKey => k in PACKS), currency };
+}
+
+/** Turns a ledger reason ("job:<id>", "purchase:CREATOR", ...) into something a customer understands. */
 export function describeEntry(reason: string): { label: string; href?: string } {
   const [kind, ref] = reason.split(":");
   switch (kind) {
     case "signup_trial":
-      return { label: "Free trial credits" };
+      return { label: "Free trial" };
     case "job":
       return { label: "Video render", href: `/dashboard/videos/${ref}` };
     case "refund":
       return { label: "Refund for a failed render", href: `/dashboard/videos/${ref}` };
-    case "subscription":
-      return { label: `${cap(ref)} plan, monthly credits` };
-    case "upgrade":
-      return { label: `Upgrade to ${cap(ref)}` };
-    case "purchase":
-    case "pack_1":
-      return { label: ref && ref !== "PACK_1" ? `Purchase (${ref})` : "Single video purchase" };
+    case "purchase": {
+      const { keys } = purchasedPacks(ref ?? "");
+      const credits = keys.reduce((sum, key) => sum + PACKS[key].credits, 0);
+      if (!credits) return { label: "Credit purchase" };
+      return { label: keys.length === 1 ? `${PACKS[keys[0]].name} pack: ${credits} credits` : `Bought ${credits} credits` };
+    }
     case "revoke":
       return { label: "Credits removed after a refund or dispute" };
     case "dispute_won":

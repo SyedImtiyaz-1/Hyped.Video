@@ -1,23 +1,21 @@
 "use client";
-import { ChevronsUpDown, PanelLeft, Plus, Search } from "lucide-react";
+import { PanelLeft, Plus } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { BRAND } from "@/lib/brand";
+import { plural } from "@/lib/format";
 import { LogoMark } from "@/components/logo";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
-import { Progress } from "@/components/ui/progress";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { ADMIN_NAV, MAIN_NAV, SOON_NAV, breadcrumbs, isActive } from "./nav";
+import { LogOutButton } from "./log-out-button";
+import { SearchBox } from "./search-box";
 
 export type ShellProps = {
-  plan: string;
-  planName: string;
   credits: number;
-  monthlyCredits: number;
   email: string;
   isAdmin: boolean;
   demo: boolean;
@@ -46,7 +44,7 @@ export function AppShell(props: ShellProps) {
     <div className="flex min-h-dvh">
       <Sidebar {...props} collapsed={collapsed} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar demo={props.demo} onToggle={toggle} />
+        <Topbar demo={props.demo} onToggle={toggle} userSlot={props.userSlot} />
         {props.demo && (
           <div className="border-b border-blue-400 bg-blue-100 px-4 py-2 text-center text-[13px] text-blue-900">
             Demo mode: sample data, nothing is saved.
@@ -60,68 +58,31 @@ export function AppShell(props: ShellProps) {
   );
 }
 
-function Sidebar({ plan, planName, credits, monthlyCredits, email, isAdmin, userSlot, collapsed }: ShellProps & { collapsed: boolean }) {
+function Sidebar({ credits, email, isAdmin, userSlot, demo, collapsed }: ShellProps & { collapsed: boolean }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const search = useRef<HTMLInputElement>(null);
-
-  // Press "F" anywhere (outside a text field) to jump to search, like Vercel.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (e.key.toLowerCase() !== "f" || e.metaKey || e.ctrlKey || e.altKey || t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
-      e.preventDefault();
-      search.current?.focus();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  const lowCredits = credits < 2;
+  const lowCredits = credits < 1;
   return (
     <aside
       className={cn(
-        "sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-gray-alpha-400 bg-background-100 transition-[width] duration-200 md:flex",
+        "sticky top-0 z-40 hidden h-dvh shrink-0 flex-col border-r border-gray-alpha-400 bg-background-100 transition-[width] duration-200 md:flex",
         collapsed ? "w-[60px]" : "w-[248px]",
       )}
     >
       <div className={cn("flex h-14 items-center gap-2 border-b border-gray-alpha-400", collapsed ? "justify-center px-2" : "px-3")}>
         <Link href="/dashboard" className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1.5 hover:bg-gray-alpha-100" title={BRAND.name}>
           <LogoMark />
-          {!collapsed && (
-            <>
-              <span className="truncate text-sm font-semibold">{BRAND.name}</span>
-              <Badge tone={plan === "FREE" ? "gray" : "blue"}>{planName}</Badge>
-              <ChevronsUpDown className="ml-auto size-4 shrink-0 text-gray-900" />
-            </>
-          )}
+          {!collapsed && <span className="truncate text-sm font-semibold">{BRAND.name}</span>}
         </Link>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 py-3">
-        {!collapsed && (
-          <form
-            className="mb-3 px-1"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const q = search.current?.value.trim();
-              router.push(q ? `/dashboard/videos?q=${encodeURIComponent(q)}` : "/dashboard/videos");
-            }}
-          >
-            <div className="relative flex items-center">
-              <Search className="pointer-events-none absolute left-2.5 size-4 text-gray-900" />
-              <input
-                ref={search}
-                name="q"
-                placeholder="Find…"
-                aria-label="Find videos"
-                className="h-8 w-full rounded-md border border-gray-alpha-400 bg-background-100 pl-8 pr-8 text-sm placeholder:text-gray-900 hover:border-gray-alpha-500 focus:border-gray-alpha-600 focus:outline-none focus:ring-4 focus:ring-gray-alpha-200"
-              />
-              <Kbd className="absolute right-1.5">F</Kbd>
-            </div>
-          </form>
-        )}
+      {/* Outside the scrolling area, so the results list isn't clipped. */}
+      {!collapsed && (
+        <div className="px-3 pt-3">
+          <SearchBox />
+        </div>
+      )}
 
+      <div className="flex-1 overflow-y-auto px-2 py-3">
         <nav className="space-y-0.5">
           {MAIN_NAV.map(({ href, label, icon: Icon, exact }) => {
             const active = isActive(pathname, href, exact);
@@ -176,28 +137,26 @@ function Sidebar({ plan, planName, credits, monthlyCredits, email, isAdmin, user
 
       <div className="border-t border-gray-alpha-400 p-3">
         {!collapsed && (
-          <Link href="/dashboard/usage" className="mb-3 block rounded-lg border border-gray-alpha-400 p-3 transition-colors hover:bg-gray-alpha-100">
-            <div className="mb-2 flex items-baseline justify-between text-[13px]">
+          <Link href="/dashboard/billing" className="mb-3 block rounded-lg border border-gray-alpha-400 p-3 transition-colors hover:bg-gray-alpha-100">
+            <div className="flex items-baseline justify-between text-[13px]">
               <span className="font-medium text-gray-1000">Credits</span>
               <span className={cn("tabular-nums", lowCredits ? "text-amber-900" : "text-gray-900")}>{credits} left</span>
             </div>
-            <Progress value={credits / Math.max(monthlyCredits, credits, 1)} tone={lowCredits ? "warning" : "default"} />
-            <p className="mt-2 text-xs text-gray-900">
-              {plan === "FREE" ? "Upgrade for more videos" : `≈ ${Math.floor(credits / 2)} videos · ${monthlyCredits}/mo on ${planName}`}
-            </p>
+            <p className="mt-1 text-xs text-gray-900">{lowCredits ? "Buy credits to make more videos" : `Enough for ${plural(credits, "short video")}`}</p>
           </Link>
         )}
         <div className={cn("flex items-center gap-2", collapsed && "flex-col")}>
           {userSlot}
           {!collapsed && <span className="min-w-0 flex-1 truncate text-[13px] text-gray-900">{email}</span>}
           {!collapsed && <ThemeToggle />}
+          {!demo && <LogOutButton variant="icon" />}
         </div>
       </div>
     </aside>
   );
 }
 
-function Topbar({ demo, onToggle }: { demo: boolean; onToggle: () => void }) {
+function Topbar({ demo, onToggle, userSlot }: { demo: boolean; onToggle: () => void; userSlot: React.ReactNode }) {
   const pathname = usePathname();
   const crumbs = breadcrumbs(pathname);
   return (
@@ -205,7 +164,7 @@ function Topbar({ demo, onToggle }: { demo: boolean; onToggle: () => void }) {
       <button type="button" onClick={onToggle} className="hidden size-8 items-center justify-center rounded-md text-gray-900 hover:bg-gray-alpha-200 hover:text-gray-1000 md:flex" aria-label="Toggle sidebar" title="Toggle sidebar">
         <PanelLeft className="size-4" />
       </button>
-      <Link href="/dashboard" className="md:hidden" aria-label="Dashboard">
+      <Link href="/dashboard" className="-ml-2 flex size-10 items-center justify-center md:hidden" aria-label="Dashboard">
         <LogoMark />
       </Link>
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
@@ -231,6 +190,8 @@ function Topbar({ demo, onToggle }: { demo: boolean; onToggle: () => void }) {
             New video
           </ButtonLink>
         )}
+        {/* Phones have no sidebar: the account menu (profile, log out) lives up here. */}
+        <div className="flex size-10 items-center justify-center md:hidden">{userSlot}</div>
       </div>
     </header>
   );

@@ -1,9 +1,11 @@
-import { Clapperboard, CreditCard, Gauge, GitPullRequest, LayoutGrid, Palette, Plus, Settings, Shield } from "lucide-react";
+import { Captions, Clapperboard, CreditCard, Gauge, GitPullRequest, LayoutGrid, LayoutTemplate, Palette, Plus, Settings, Shield } from "lucide-react";
 
 export const MAIN_NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutGrid, exact: true },
   { href: "/dashboard/videos", label: "Videos", icon: Clapperboard },
   { href: "/dashboard/new", label: "New video", icon: Plus },
+  { href: "/dashboard/templates", label: "Templates", icon: LayoutTemplate },
+  { href: "/dashboard/reels", label: "Reels", icon: Captions },
   { href: "/dashboard/usage", label: "Usage", icon: Gauge },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
@@ -25,6 +27,8 @@ const TITLES: Record<string, string> = {
   "/dashboard": "Overview",
   "/dashboard/videos": "Videos",
   "/dashboard/new": "New video",
+  "/dashboard/templates": "Templates",
+  "/dashboard/reels": "Reels",
   "/dashboard/usage": "Usage",
   "/dashboard/billing": "Billing",
   "/dashboard/settings": "Settings",

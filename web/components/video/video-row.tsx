@@ -1,6 +1,8 @@
 import type { Job } from "@launchreel/core";
 import { customerError } from "@launchreel/core/engines";
-import { ChevronRight, GitBranch, Globe } from "lucide-react";
+import { Captions, ChevronRight, GitBranch, Globe } from "lucide-react";
+import type { ReelJob } from "@launchreel/core/reel";
+import { REEL_STYLE_INFO } from "@/components/reels/labels";
 import Link from "next/link";
 import { FORMAT_LABEL, formatDuration, hostOf, renderSeconds, shortId, timeAgo, toneLabel } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +11,8 @@ import { VideoThumb } from "./video-thumb";
 
 /** One row in a video list, modelled on Vercel's deployments list. */
 export function VideoRow({ job }: { job: Job }) {
-  const SourceIcon = job.sourceType === "GITHUB" ? GitBranch : Globe;
+  const reel = job.kind === "reel" ? (job.reel as ReelJob | null) : null;
+  const SourceIcon = reel ? Captions : job.sourceType === "GITHUB" ? GitBranch : Globe;
   const seconds = renderSeconds(job);
   return (
     <Link
@@ -30,13 +33,11 @@ export function VideoRow({ job }: { job: Job }) {
 
       <div className="hidden md:block">
         <StatusDot status={job.status} />
-        <p className="mt-0.5 pl-[18px] text-xs tabular-nums text-gray-900">
-          {job.status === "QUEUED" ? "Waiting" : formatDuration(seconds)}
-        </p>
+        <p className="mt-0.5 pl-[18px] text-xs tabular-nums text-gray-900">{job.status === "QUEUED" ? "Waiting" : formatDuration(seconds)}</p>
       </div>
 
       <div className="hidden min-w-0 md:block">
-        <p className="truncate text-sm text-gray-1000">{toneLabel(job.tone)}</p>
+        <p className="truncate text-sm text-gray-1000">{reel ? `Reel · ${REEL_STYLE_INFO[reel.style]?.label ?? reel.style} captions` : toneLabel(job.tone)}</p>
         <p className="mt-0.5 truncate text-xs text-gray-900">
           {FORMAT_LABEL[job.format] ?? job.format} · {job.durationSec}s{job.error ? ` · ${customerError(job.error)}` : ""}
         </p>

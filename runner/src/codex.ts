@@ -52,7 +52,10 @@ export async function runCodex(workdir: string, req: BragRequest, opts: RunOptio
   env.CODEX_HOME = join(home, ".codex");
   env.PLAYWRIGHT_BROWSERS_PATH ??= join(realHome, process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
   env.npm_config_cache = process.env.npm_config_cache ?? join(realHome, ".npm");
-  if (baseUrl) env.OPENAI_API_KEY = process.env.OPENAI_API_KEY; // placeholder; the Worker adds the real key
+  if (baseUrl) {
+    env.OPENAI_API_KEY = process.env.OPENAI_API_KEY; // placeholder; the Worker adds the real key
+    env.OPENAI_BASE_URL = baseUrl; // for the voice tool, which the agent runs from its shell
+  }
   else env.CODEX_API_KEY = process.env.CODEX_API_KEY ?? process.env.OPENAI_API_KEY; // local benchmark: real key
 
   const usage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -98,6 +101,12 @@ export async function runCodex(workdir: string, req: BragRequest, opts: RunOptio
       case "error":
         lastError = ev.message ?? ev.error?.message ?? JSON.stringify(ev).slice(0, 500);
         break;
+      case "item.started": {
+        // Logged at the start too, so a command that never returns shows up in the job log.
+        const item = ev.item ?? {};
+        if (item.type === "command_execution") opts.onEvent?.(`started ${String(item.command ?? "").slice(0, 120)}`);
+        break;
+      }
       case "item.completed": {
         const item = ev.item ?? {};
         if (item.type && item.type !== "agent_message" && item.type !== "reasoning") {

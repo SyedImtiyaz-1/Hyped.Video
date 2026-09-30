@@ -1,65 +1,101 @@
 {
-  "$schema": "../node_modules/wrangler/config-schema.json",
-  "name": "launchreel-render",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat"],
-
-  // One throwaway container per video. standard-4 = 4 vCPU, 12 GiB, 20 GB disk.
-  "containers": [
-    {
-      "class_name": "VideoSandbox",
-      "image": "../runner/Dockerfile",
-      "instance_type": "standard-4",
-      "max_instances": 20, // raise with your model provider rate limits; see docs/ARCHITECTURE.md
-      // A deploy replaces running containers; give in-flight renders up to 40 minutes to finish.
-      "rollout_active_grace_period": 2400
-    }
-  ],
-  "durable_objects": {
-    "bindings": [{ "name": "Sandbox", "class_name": "VideoSandbox" }]
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["VideoSandbox"] }],
-
-  // The durable render pipeline. The web Worker starts instances through its own binding.
-  "workflows": [{ "name": "video-jobs", "binding": "VIDEO_JOBS", "class_name": "VideoJobWorkflow" }],
-
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "REPLACE_WITH_HYPERDRIVE_ID",
-      "localConnectionString": "postgresql://launchreel:launchreel@localhost:5432/launchreel"
-    }
-  ],
-  "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "launchreel-videos" }],
-
-  // Safety net: fail and refund jobs whose workflow died, every 10 minutes.
-  "triggers": { "crons": ["*/10 * * * *"] },
-
-  "vars": {
-    // Raw (binary) file reads out of the container need the RPC transport.
-    "SANDBOX_TRANSPORT": "rpc",
-    "PUBLIC_VIDEO_BASE_URL": "https://videos.example.com",
-    "BRAND_NAME": "LaunchReel",
-    // Which agent makes the videos: "claude" (Claude Agent SDK) or "openai" (Codex CLI). If the primary
-    // engine fails because of its provider (bad key, rate limit, outage), the job is retried once on the
-    // fallback. An engine whose API key isn't set is skipped. Set ENGINE_FALLBACK to "" to turn it off.
-    // OpenAI first for now, until the Anthropic key works. Then switch back: ENGINE "claude", ENGINE_FALLBACK "openai".
-    "ENGINE": "openai",
-    "ENGINE_FALLBACK": "claude",
-    // Cost control: free videos use each provider's cheaper model and are capped at 15 seconds.
-    "CLAUDE_MODEL_PAID": "claude-opus-5-5",
-    "CLAUDE_MODEL_FREE": "claude-sonnet-5",
-    // gpt-6-astra is closer to Opus but costs 2.5x as much, and Codex has no dollar cap (only MAX_TURNS and
-    // the time limit), so a paid video could cost more than it sells for. Measure before switching:
-    // ENGINE=openai OPENAI_MODEL=gpt-6-astra npm run measure
-    "OPENAI_MODEL_PAID": "gpt-6-sol",
-    "OPENAI_MODEL_FREE": "gpt-6-sol",
-    "CLAUDE_EFFORT": "medium",
-    "MAX_COST_PER_JOB_USD": "8",
-    "MAX_TURNS": "150"
-  },
-  // Secrets (npx wrangler secret put ANTHROPIC_API_KEY / OPENAI_API_KEY): used only by the egress handlers,
-  // never sent into containers.
-  "observability": { "enabled": true }
+	"$schema": "../node_modules/wrangler/config-schema.json",
+	"name": "hyped-render",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	// One throwaway container per video. standard-4 = 4 vCPU, 12 GiB, 20 GB disk.
+	"containers": [
+		{
+			"class_name": "VideoSandbox",
+			"image": "../runner/Dockerfile",
+			"instance_type": "standard-4",
+			"max_instances": 20, // raise with your model provider rate limits; see docs/ARCHITECTURE.md
+			// A deploy replaces running containers; give in-flight renders up to 40 minutes to finish.
+			"rollout_active_grace_period": 2400
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "Sandbox",
+				"class_name": "VideoSandbox"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"VideoSandbox"
+			]
+		}
+	],
+	// The durable render pipeline. The web Worker starts instances through its own binding.
+	"workflows": [
+		{
+			"name": "video-jobs",
+			"binding": "VIDEO_JOBS",
+			"class_name": "VideoJobWorkflow"
+		}
+	],
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "871b856bfba04f05b292f88ccaadfb3e", // hyped-db → Neon (caching disabled)
+			"localConnectionString": "postgresql://launchreel:launchreel@localhost:5433/launchreel"
+		}
+	],
+	// Workers AI: speech recognition for voiceover word timings (the timings.internal virtual host).
+	"ai": {
+		"binding": "AI"
+	},
+	"r2_buckets": [
+		{
+			"binding": "VIDEOS",
+			"bucket_name": "hyped-videos"
+		}
+	],
+	// media.hyped.video: finished videos, posters and captions (see PUBLIC_VIDEO_BASE_URL). workers.dev must stay
+	// on: earlier videos' links point there, and Wrangler turns it off when routes are set unless told otherwise.
+	"workers_dev": true,
+	"routes": [
+		{
+			"pattern": "media.hyped.video",
+			"custom_domain": true
+		}
+	],
+	// Safety net: fail and refund jobs whose workflow died, every 10 minutes.
+	"triggers": {
+		"crons": [
+			"*/10 * * * *"
+		]
+	},
+	"vars": {
+		// Raw (binary) file reads out of the container need the RPC transport.
+		"SANDBOX_TRANSPORT": "rpc",
+		// Where customers load videos: this Worker serves them (serveMedia) on media.hyped.video. Never the R2
+		// bucket's public domain: the bucket also holds each job's workspace, which can contain a private repo.
+		"PUBLIC_VIDEO_BASE_URL": "https://media.hyped.video",
+		"BRAND_NAME": "Hyped", // free-trial watermark: "Made with Hyped"
+		// Customers pick a quality tier; each tier always runs on one engine: "claude" (Claude Agent SDK) or
+		// "openai" (Codex CLI). There is no fallback between them: a failed render is refunded. Customers only
+		// see the tier names (Standard, Studio), never the engine or model.
+		// Standard: the budget tier, and every free-trial video.
+		"STANDARD_ENGINE": "openai",
+		"STANDARD_MODEL": "gpt-6-sol",
+		// Studio: the premium tier for flagship launch videos (more credits; see QUALITY_CREDIT_MULTIPLIER).
+		"STUDIO_ENGINE": "claude",
+		"STUDIO_MODEL": "claude-opus-5-5",
+		"CLAUDE_EFFORT": "medium",
+		"MAX_COST_PER_JOB_USD": "8",
+		"MAX_TURNS": "150"
+	},
+	// Secrets (npx wrangler secret put ANTHROPIC_API_KEY / OPENAI_API_KEY): used only by the egress handlers,
+	// never sent into containers.
+	"observability": {
+		"enabled": true
+	}
 }
