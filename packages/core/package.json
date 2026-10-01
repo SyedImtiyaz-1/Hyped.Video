@@ -27,6 +27,7 @@
     "./repo-token": "./src/repo-token.ts",
     "./voices": "./src/voices.ts",
     "./templates": "./src/templates.ts",
-    "./reel": "./src/reel.ts"
+    "./reel": "./src/reel.ts",
+    "./captions": "./src/captions.ts"
   }
 }

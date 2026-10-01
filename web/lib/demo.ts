@@ -51,7 +51,7 @@ export const demoJobs = (): Job[] => [
   job({
     id: "cmgk2reel0000008", kind: "reel", status: "SUCCEEDED", sourceType: "UPLOAD", sourceUrl: "SaveClip.App_AQOpAJwH-yLE8ZtiyXZtFrO2TlQZv5b_g9Z8__SUBQ5Wy9PXTColfGCsHRvA1OUsepdn3xb2tlmXKHQ9nhdM2H9JPR91UdtAaQLeGoc.mp4",
     format: "vertical", durationSec: 58, music: "none", creditsCost: 1,
-    reel: { style: "bold", fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto", key: "uploads/demo/reel.mp4", fileName: "SaveClip.App_AQOpAJwH-yLE8ZtiyXZtFrO2TlQZv5b_g9Z8__SUBQ5Wy9PXTColfGCsHRvA1OUsepdn3xb2tlmXKHQ9nhdM2H9JPR91UdtAaQLeGoc.mp4", bytes: 24_000_000, durationSec: 58, width: 1080, height: 1920 },
+    reel: { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto", key: "uploads/demo/reel.mp4", fileName: "SaveClip.App_AQOpAJwH-yLE8ZtiyXZtFrO2TlQZv5b_g9Z8__SUBQ5Wy9PXTColfGCsHRvA1OUsepdn3xb2tlmXKHQ9nhdM2H9JPR91UdtAaQLeGoc.mp4", bytes: 24_000_000, durationSec: 58, width: 1080, height: 1920 },
     videoUrl: `${SAMPLE}/horse-tinder/brag.mp4`, posterUrl: `${SAMPLE}/horse-tinder/brag.jpg`,
     createdAt: ago(3), startedAt: ago(3), finishedAt: ago(2), computeSeconds: 70, llmCostUsd: 0.001,
   }),

@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import type { JobResult } from "@launchreel/core/contract";
 import { llmCostUsd, VOICE_TIMINGS_USD_PER_MINUTE, type TokenUsage } from "@launchreel/core/pricing";
+import { CAPTION_STROKES, CAPTION_STYLES, resolveLook, type CaptionFont, type CaptionLook, type ReelLookChanges } from "@launchreel/core/captions";
 import type { ReelFont, ReelLanguage, ReelOptions, ReelSpec, ReelStyle } from "@launchreel/core/reel";
 import { FACES, type Face, type FaceName } from "./fonts.ts";
 import { endsSentence, groupWords, master, round, srtCues, WEAK, type Group, type PhraseLimits, type Word } from "./media.ts";
@@ -191,6 +192,15 @@ function tidy(words: Word[], duration: number, pauses: [number, number][]): Word
     out.push({ text: w.text, start: round(start), end: round(Math.min(duration, Math.max(start + 0.08, end))) });
   }
   return out;
+}
+
+/** One caption line per word: up until the next word, or held a moment when a pause follows. */
+function singles(words: Word[], limits: PhraseLimits): Group[] {
+  return words.map((w, i) => {
+    const next = words[i + 1]?.start ?? Infinity;
+    const end = next - w.end < limits.pause ? next : w.end + limits.hold;
+    return { start: w.start, end: round(Math.max(w.end, end)), text: w.text, words: [w] };
+  });
 }
 
 /** Capitalizes the first word and each word after a sentence ends (romanized Hinglish comes back all lowercase). */
@@ -380,43 +390,54 @@ function heuristicPlan(groups: Group[], options: ReelOptions): Plan {
 
 /* ---------- looks ---------- */
 
-// Inter's average letter width in em, measured on English text, and libass's font size: an ASS size of 100 draws Inter
-// at about 82.6 px, because libass sizes a font by its ascender plus descender.
-const INTER = {
-  "Inter Black": { upper: 0.68, lower: 0.553, space: 0.199 },
-  "Inter Extra Bold": { upper: 0.674, lower: 0.543, space: 0.215 },
-  "Inter Semi Bold": { upper: 0.661, lower: 0.525, space: 0.248 },
-  "Inter Medium": { upper: 0.655, lower: 0.515, space: 0.265 },
-} as const;
-type Font = keyof typeof INTER;
-const ASS_EM = 0.826;
+// The caption looks are data (CAPTION_STYLES in @launchreel/core/captions), shared with the web app's previews. Here
+// they become ASS for libass. libass sizes a font so its Windows ascent and descent add up to the ASS font size, so a
+// line is `size` pixels tall; fonts.ts has every face's measurements, so lines break and boxes fit exactly.
 
-const textWidth = (text: string, font: Font, size: number) => {
-  const m = INTER[font];
-  let em = 0;
-  for (const ch of text) em += ch === " " ? m.space : /[A-Z0-9%$#@&]/.test(ch) ? m.upper : /[.,'!:;|il]/.test(ch) ? m.lower * 0.55 : m.lower;
-  return em * ASS_EM * size;
-};
+/** A caption style with the customer's changes, and how it groups words into lines. */
+type Look = CaptionLook & { style: ReelStyle; limits: PhraseLimits };
 
-type Look = {
-  limits: PhraseLimits;
-  font: Font;
-  size: number; // font size as a share of sqrt(width × height)
-  casing: "upper" | "lower" | "as-said";
-  anchor: "top" | "bottom"; // top: the caption hangs from a fixed line, so an emoji can sit above it whatever its line count
+// How each style groups words: at most this many words, characters and seconds a line, a new line after a pause this
+// long, and the line held this long after its last word. Changing words-per-line scales the first three.
+const LIMITS: Record<ReelStyle, PhraseLimits> = {
+  bold: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 },
+  behind: { maxWords: 4, maxChars: 24, maxSeconds: 2.2, pause: 0.45, hold: 0.5 },
+  clean: { maxWords: 6, maxChars: 30, maxSeconds: 2.6, pause: 0.5, hold: 0.6 },
+  karaoke: { maxWords: 6, maxChars: 28, maxSeconds: 3, pause: 0.6, hold: 0.6 },
+  minimal: { maxWords: 5, maxChars: 26, maxSeconds: 2.4, pause: 0.5, hold: 0.6 },
+  box: { maxWords: 5, maxChars: 26, maxSeconds: 2.2, pause: 0.5, hold: 0.5 },
+  highlight: { maxWords: 4, maxChars: 16, maxSeconds: 1.6, pause: 0.4, hold: 0.5 },
+  single: { maxWords: 1, maxChars: 14, maxSeconds: 0.9, pause: 0.3, hold: 0.3 },
+  neon: { maxWords: 4, maxChars: 18, maxSeconds: 1.8, pause: 0.45, hold: 0.5 },
+  outline: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 },
+  news: { maxWords: 7, maxChars: 38, maxSeconds: 3, pause: 0.6, hold: 0.6 },
+  retro: { maxWords: 4, maxChars: 16, maxSeconds: 1.6, pause: 0.4, hold: 0.5 },
 };
 
 const YELLOW = "#FFD60A";
-const GREEN = "#3BF26B";
 
-const LOOKS: Record<ReelStyle, Look> = {
-  bold: { limits: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 }, font: "Inter Black", size: 0.066, casing: "upper", anchor: "top" },
-  clean: { limits: { maxWords: 6, maxChars: 30, maxSeconds: 2.6, pause: 0.5, hold: 0.6 }, font: "Inter Semi Bold", size: 0.047, casing: "as-said", anchor: "top" },
-  karaoke: { limits: { maxWords: 6, maxChars: 28, maxSeconds: 3, pause: 0.6, hold: 0.6 }, font: "Inter Extra Bold", size: 0.06, casing: "as-said", anchor: "top" },
-  minimal: { limits: { maxWords: 5, maxChars: 26, maxSeconds: 2.4, pause: 0.5, hold: 0.6 }, font: "Inter Medium", size: 0.043, casing: "lower", anchor: "bottom" },
-  // Short lines: each one's big word goes behind the speaker and the rest is a small caption in front (buildBehind).
-  behind: { limits: { maxWords: 4, maxChars: 24, maxSeconds: 2.2, pause: 0.45, hold: 0.5 }, font: "Inter Extra Bold", size: 0.05, casing: "as-said", anchor: "top" },
-};
+/** A style with the customer's changes applied, and its line limits. */
+function lookFor(style: ReelStyle, changes: ReelLookChanges | undefined): Look {
+  const look = resolveLook(style, changes);
+  const preset = LIMITS[style];
+  const k = look.words / CAPTION_STYLES[style].words;
+  const limits = k === 1 ? preset : { ...preset, maxWords: look.words, maxChars: Math.max(8, Math.round(preset.maxChars * k)), maxSeconds: Math.max(0.6, round(preset.maxSeconds * Math.sqrt(k))) };
+  return { ...look, style, limits };
+}
+
+// Inter comes in the look's weight; the display fonts have one face each (runner/fonts).
+const INTER_FACES = { black: "Inter Black", extrabold: "Inter Extra Bold", semibold: "Inter Semi Bold", medium: "Inter Medium" } as const;
+const DISPLAY_FACES: Record<Exclude<CaptionFont, "inter">, FaceName> = { anton: "Anton", abril: "Abril Fatface", archivo: "Archivo Black", dmserif: "DM Serif Display", kaushan: "Kaushan Script", marker: "Permanent Marker" };
+const faceOf = (look: CaptionLook): Face => FACES[look.font === "inter" ? INTER_FACES[look.weight] : DISPLAY_FACES[look.font]];
+/** The face for a key word: Inter Extra Bold in the light Inter styles (clean, minimal), else the look's own. */
+const keyFaceOf = (look: CaptionLook): Face => (look.font === "inter" && (look.weight === "semibold" || look.weight === "medium") ? FACES["Inter Extra Bold"] : faceOf(look));
+
+/** Text in a face at ASS size `size`: its advance width in pixels (what libass centres). Kerning is left out. */
+function advance(face: Face, text: string, size: number) {
+  let em = 0;
+  for (const ch of text) if (!/\p{M}/u.test(ch)) em += glyphOf(face, ch)[0];
+  return (em * size) / (face.asc + face.desc);
+}
 
 /** Where things go, as shares of the frame. 9:16 keeps clear of the platform's buttons on the right and the bottom 30%. */
 function layoutFor(width: number, height: number) {
@@ -439,8 +460,8 @@ const assTime = (t: number) => {
 // Braces and backslashes would start ASS override tags.
 const assText = (s: string) => s.replace(/[{}\\]/g, "");
 
-/** A word as the look writes it: bold drops trailing commas and full stops, minimal is lowercase, and so on. */
-function shown(word: string, look: Look) {
+/** A word as the look writes it: capitals and lower case drop trailing commas and full stops. */
+function shown(word: string, look: CaptionLook) {
   const text = assText(word);
   if (look.casing === "upper") return text.replace(/[.,;:]+$/, "").toLocaleUpperCase("en");
   if (look.casing === "lower") return text.replace(/[.,;:]+$/, "").toLocaleLowerCase("en");
@@ -448,8 +469,8 @@ function shown(word: string, look: Look) {
 }
 
 /** Splits a caption into one or two balanced lines that fit `max` wide, shrinking the text if a word alone is wider. */
-function lineBreak(words: string[], font: Font, size: number, max: number): { lines: string[][]; scale: number } {
-  const width = (ws: string[]) => textWidth(ws.join(" "), font, size);
+function lineBreak(words: string[], face: Face, size: number, max: number): { lines: string[][]; scale: number } {
+  const width = (ws: string[]) => advance(face, ws.join(" "), size);
   if (words.length < 2 || width(words) <= max) return { lines: [words], scale: Math.min(1, max / width(words)) };
   let best = { lines: [words], widest: Infinity };
   for (let k = 1; k < words.length; k++) {
@@ -457,6 +478,13 @@ function lineBreak(words: string[], font: Font, size: number, max: number): { li
     if (widest < best.widest) best = { lines: [words.slice(0, k), words.slice(k)], widest };
   }
   return { lines: best.lines, scale: Math.min(1, max / best.widest) };
+}
+
+/** An ASS drawing of a rounded rectangle, absolute pixels (draw with \an7\pos(0,0)\p1). */
+function roundedRect(x0: number, y0: number, x1: number, y1: number, r: number) {
+  const [a, b, c, d] = [x0, y0, x1, y1].map(Math.round);
+  const q = Math.round(Math.min(r, (c - a) / 2, (d - b) / 2));
+  return `m ${a + q} ${b} l ${c - q} ${b} b ${c} ${b} ${c} ${b} ${c} ${b + q} l ${c} ${d - q} b ${c} ${d} ${c} ${d} ${c - q} ${d} l ${a + q} ${d} b ${a} ${d} ${a} ${d} ${a} ${d - q} l ${a} ${b + q} b ${a} ${b} ${a} ${b} ${a + q} ${b}`;
 }
 
 type Frame = { width: number; height: number };
@@ -501,90 +529,163 @@ function assDoc(frame: Frame, styles: string[], events: string[]): string {
 
 const dialogueLine = (start: number, end: number, name: string, text: string, layer = 0) => (end - start >= 0.01 ? `Dialogue: ${layer},${assTime(start)},${assTime(end)},${name},,0,0,0,,${text}` : null);
 
+/** Where captions go for a look: the line they hang from (top) or stand on (bottom), and where the hook goes. */
+function placeCaptions(look: CaptionLook, frame: Frame, spec: ReelSpec, markSize: number) {
+  const { width: W, height: H } = frame;
+  const layout = layoutFor(W, H);
+  const tall = H / W >= 1.6;
+  const anchor: "top" | "bottom" = look.position === "bottom" ? "bottom" : "top";
+  const top = Math.round((look.position === "top" ? (tall ? 0.22 : layout.hookTop + 0.1) : layout.captionTop) * H);
+  const bottom = Math.round(layout.captionBottom * H);
+  // The hook sits at the top, below the free plan's mark; with captions up there it moves to the middle.
+  const hookY = look.position === "top" ? Math.round(layout.captionTop * H * 0.9) : Math.round(Math.max(layout.hookTop * H, spec.watermark ? layout.markTop * H + markSize * 2.4 : 0));
+  return { anchor, top, bottom, hookY, layout };
+}
+
 /**
- * The captions, hook title and watermark as one ASS file for libass, and where each emoji goes. Every word change is its
- * own event, so the spoken word can take the accent colour and a small pop without moving the rest of the line.
+ * The captions, hook title and watermark as one ASS file for libass, and where each emoji goes, for any caption style.
+ * Every word change is its own event, so the spoken word can take the accent colour (and pop) without moving the rest
+ * of the line. Boxes, marker bands and bars are drawn shapes on a layer below the words, sized from the fonts' exact
+ * measurements.
  */
-function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: Exclude<ReelStyle, "behind">, spec: ReelSpec, duration: number): { ass: string; emojis: EmojiShot[] } {
+function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, spec: ReelSpec, duration: number): { ass: string; emojis: EmojiShot[] } {
   const { width: W, height: H } = frame;
   const base = Math.sqrt(W * H);
-  const layout = layoutFor(W, H);
   const size = Math.round(look.size * base);
-  const max = W * (1 - 2 * layout.side) * 0.94;
-  const x = Math.round(W / 2);
-  const top = Math.round(layout.captionTop * H);
-  const bottom = Math.round(layout.captionBottom * H);
-  // Bold and karaoke get a hard black outline; clean and minimal a soft dark halo (blurred), so white text still reads on
-  // white screen recordings.
-  const outline = { bold: 0.1, clean: 0.09, karaoke: 0.075, minimal: 0.08 }[style] * size;
-  const shadow = { bold: 0.05, clean: 0.05, karaoke: 0.04, minimal: 0.04 }[style] * size;
-  const halo = style === "clean" ? 0x50 : style === "minimal" ? 0x60 : 0;
+  const face = faceOf(look);
+  const keyFace = keyFaceOf(look);
   const hookSize = Math.round(0.056 * base);
   const markSize = Math.round(0.021 * base);
+  const { anchor, top, bottom, hookY, layout } = placeCaptions(look, frame, spec, markSize);
+  const max = W * (1 - 2 * layout.side) * (look.background === "bar" ? 0.86 : 0.94);
+  const x = Math.round(W / 2);
+  const stroke = CAPTION_STROKES[look.style];
+  const hollow = look.fill === "hollow";
+  const outline = (hollow ? 0.045 : stroke.outline) * size;
+  const karaoke = look.fill === "karaoke";
   const styles = [
-    // Caption: white text; karaoke fills from white (secondary) to yellow (primary).
-    `Style: Caption,${look.font},${size},${style === "karaoke" ? assColor(YELLOW) : assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000", halo)},${assColor("#000000", style === "bold" ? 0 : 0x70)},0,0,0,0,100,100,0,0,1,${outline.toFixed(1)},${shadow.toFixed(1)},${look.anchor === "top" ? 8 : 2},0,0,0,1`,
+    // Caption: karaoke fills from the words' colour (secondary) to the accent (primary); hollow letters are all outline.
+    `Style: Caption,${face.family},${size},${assColor(karaoke ? look.accent : look.color)},${assColor(look.color)},${hollow ? assColor(look.color) : assColor("#000000", stroke.halo)},${look.hardShadow ? assColor(look.keyword) : assColor("#000000", stroke.back)},0,${face.italic ? -1 : 0},0,0,100,100,0,0,1,${outline.toFixed(1)},${(stroke.shadow * size).toFixed(1)},${anchor === "top" ? 8 : 2},0,0,0,1`,
     `Style: Hook,Inter Black,${hookSize},${assColor("#0A0A0A")},${assColor("#0A0A0A")},${assColor(YELLOW)},${assColor("#000000", 0x80)},0,0,0,0,100,100,0,0,3,${Math.round(hookSize * 0.22)},0,8,0,0,0,1`,
     markStyle(markSize),
   ];
   const events: string[] = [];
-  const dialogue = (start: number, end: number, name: string, text: string, layer = 0) => {
+  const dialogue = (start: number, end: number, name: string, text: string, layer = 1) => {
     const line = dialogueLine(start, end, name, text, layer);
     if (line) events.push(line);
   };
-  const soft = halo ? `\\blur${Math.max(3, Math.round(size * 0.14))}` : "";
+  // A soft halo is the outline blurred; a glow is a wide blurred outline in the accent colour, drawn underneath.
+  const soft = look.stroke === "soft" ? `\\blur${Math.max(3, Math.round(size * 0.14))}` : "";
   const emojis: EmojiShot[] = [];
-  const emojiSize = even((style === "minimal" ? 0.08 : 0.115) * base);
+  const emojiSize = even((look.size < 0.045 ? 0.08 : 0.115) * base);
+  const space = advance(face, " ", size);
+  const lineHeight = size;
+  const ascent = (face.asc / (face.asc + face.desc)) * size;
+  const capHeight = (glyphOf(face, "H")[4] * size) / (face.asc + face.desc);
 
   groups.forEach((g, gi) => {
     const line = plan.lines[gi];
     const words = g.words.map((w) => shown(w.text, look));
-    const { lines, scale } = lineBreak(words, look.font, size, max);
+    const { lines, scale } = lineBreak(words, face, size, max);
     const fs = scale < 1 ? `\\fs${Math.floor(size * scale)}` : "";
-    const pos = look.anchor === "top" ? `\\an8\\pos(${x},${top})` : `\\an2\\pos(${x},${bottom})`;
+    const pos = anchor === "top" ? `\\an8\\pos(${x},${top})` : `\\an2\\pos(${x},${bottom})`;
     const breaks = new Set<number>(lines.length > 1 ? [lines[0].length] : []);
     const join = (parts: string[]) => parts.map((p, i) => (i > 0 ? (breaks.has(i) ? "\\N" : " ") : "") + p).join("");
     const isKey = (i: number) => line.keyword === i;
+    const faceFor = (i: number) => (isKey(i) && keyFace !== face ? keyFace : face);
+    const fad = look.animation === "none" ? "" : look.animation === "fade" ? "\\fad(120,0)" : "\\fad(60,0)";
 
-    if (style === "karaoke") {
-      // One event per line: each word fills as it's said (\kf), keywords fill green.
+    // Where each word sits, for shapes behind the words: its line, and its left and right edges.
+    const lineOf = (i: number) => (lines.length > 1 && i >= lines[0].length ? 1 : 0);
+    const span = (l: number) => (l === 0 ? [0, lines[0].length] : [lines[0].length, words.length]);
+    const lineWidth = (l: number) => {
+      const [from, to] = span(l);
+      let w = 0;
+      for (let i = from; i < to; i++) w += advance(faceFor(i), words[i], size) + (i > from ? space : 0);
+      return w * scale;
+    };
+    const lineTop = (l: number) => (anchor === "top" ? top + l * lineHeight * scale : bottom - (lines.length - l) * lineHeight * scale);
+    const wordBox = (i: number) => {
+      const l = lineOf(i);
+      const [from] = span(l);
+      let left = x - lineWidth(l) / 2;
+      for (let j = from; j < i; j++) left += (advance(faceFor(j), words[j], size) + space) * scale;
+      return { l, x0: left, x1: left + advance(faceFor(i), words[i], size) * scale };
+    };
+
+    // Shapes behind the words, for the whole line: a box, or a lower-third bar with an accent stripe.
+    const shape = (start: number, end: number, path: string, color: string, alpha: number, layer = 0) =>
+      dialogue(start, end, "Caption", `{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c${tagColor(color)}\\1a&H${alpha.toString(16).padStart(2, "0").toUpperCase()}&${fad}}${path}{\\p0}`, layer);
+    if (look.background === "box") {
+      const pad = [0.28 * size * scale, 0.14 * size * scale];
+      const widest = Math.max(...lines.map((_, l) => lineWidth(l)));
+      shape(g.start, g.end, roundedRect(x - widest / 2 - pad[0], lineTop(0) + 0.06 * size - pad[1], x + widest / 2 + pad[0], lineTop(lines.length - 1) + lineHeight * scale - 0.02 * size + pad[1], 0.22 * size), look.backgroundColor, 0x38);
+    } else if (look.background === "bar") {
+      const [y0, y1] = [lineTop(0) - 0.2 * size, lineTop(lines.length - 1) + lineHeight * scale + 0.2 * size];
+      shape(g.start, g.end, roundedRect(W * 0.05, y0, W * 0.95, y1, 0.12 * size), look.backgroundColor, 0x20);
+      shape(g.start, g.end, roundedRect(W * 0.05, y0, W * 0.05 + 0.16 * size, y1, 0.06 * size), look.accent, 0, 0);
+    }
+
+    if (karaoke) {
+      // One event per line: each word fills as it's said (\kf), key words fill in their own colour.
       const parts = g.words.map((w, i) => {
         const next = i + 1 < g.words.length ? g.words[i + 1].start : g.end;
         const fill = Math.max(1, Math.round((Math.min(next, w.end + 0.15) - w.start) * 100));
         const wait = Math.max(0, Math.round((next - w.start) * 100) - fill);
-        const word = isKey(i) ? `{\\1c${tagColor(GREEN)}}${words[i]}{\\1c${tagColor(YELLOW)}}` : words[i];
+        const word = isKey(i) ? `{\\1c${tagColor(look.keyword)}}${words[i]}{\\1c${tagColor(look.accent)}}` : words[i];
         return `{\\kf${fill}}${word}${wait ? `{\\k${wait}}` : ""}`;
       });
-      dialogue(g.start, g.end, "Caption", `{${pos}${fs}\\fad(80,60)}${join(parts)}`);
+      dialogue(g.start, g.end, "Caption", `{${pos}${fs}${look.animation === "none" ? "" : "\\fad(80,60)"}}${join(parts)}`);
     } else {
-      // One event per spoken word: it takes the accent colour (bold: keywords green) and pops.
+      // One event per spoken word.
       g.words.forEach((w, k) => {
         const start = k === 0 ? g.start : w.start;
         const end = k + 1 < g.words.length ? g.words[k + 1].start : g.end;
+        if (look.background === "band") {
+          // The marker: a rounded band behind the spoken word.
+          const box = wordBox(k);
+          const y = lineTop(box.l) + (ascent - capHeight) * scale;
+          shape(start, end, roundedRect(box.x0 - 0.12 * size, y - 0.16 * size * scale, box.x1 + 0.12 * size, y + (capHeight + 0.16 * size) * scale, 0.14 * size), look.backgroundColor, 0);
+        }
         const parts = words.map((word, i) => {
-          if (style === "minimal") {
+          const heavy = faceFor(i) !== face ? `\\fn${faceFor(i).family}` : "";
+          const back = heavy ? `\\fn${face.family}` : "";
+          if (look.fill === "dim") {
             const alpha = i === k ? "&H00&" : "&H48&";
-            return isKey(i) ? `{\\1a${alpha}\\fnInter Extra Bold}${word}{\\fn${look.font}}` : `{\\1a${alpha}}${word}`;
+            return `{\\1a${alpha}${heavy}}${word}${back ? `{${back}}` : ""}`;
           }
-          const color = style === "bold" && isKey(i) ? GREEN : YELLOW;
-          const heavy = style === "clean" && isKey(i) ? `\\fnInter Extra Bold` : "";
+          if (hollow) {
+            // Outlined letters; the spoken word filled in the accent colour.
+            return i === k ? `{\\1a&H00&\\1c${tagColor(look.accent)}}${word}{\\1a&HFF&}` : word;
+          }
+          const color = isKey(i) && look.keyword !== look.color ? look.keyword : look.accent;
           if (i === k) {
-            const pop = style === "bold" ? (isKey(i) ? 124 : 114) : 108;
-            return `{\\1c${tagColor(color)}${heavy}\\fscx${pop}\\fscy${pop}\\t(0,110,\\fscx100\\fscy100)}${word}{\\1c&HFFFFFF&\\fscx100\\fscy100${heavy ? `\\fn${look.font}` : ""}}`;
+            const pop = look.animation === "pop" && look.background !== "band" ? (look.size >= 0.06 ? (isKey(i) ? 124 : 114) : 108) : 0;
+            const grow = pop ? `\\fscx${pop}\\fscy${pop}\\t(0,110,\\fscx100\\fscy100)` : "";
+            // On the marker band the word is printed flat: no outline or shadow.
+            const [flat, unflat] = look.background === "band" ? ["\\bord0\\shad0", `\\bord${outline.toFixed(1)}\\shad${(stroke.shadow * size).toFixed(1)}`] : ["", ""];
+            return `{\\1c${tagColor(color)}${heavy}${grow}${flat}}${word}{\\1c${tagColor(look.color)}${pop ? "\\fscx100\\fscy100" : ""}${back}${unflat}}`;
           }
-          if (style === "bold" && isKey(i)) return `{\\1c${tagColor(GREEN)}}${word}{\\1c&HFFFFFF&}`;
-          return heavy ? `{${heavy}}${word}{\\fn${look.font}}` : word;
+          if (isKey(i) && look.keyword !== look.color) return `{\\1c${tagColor(look.keyword)}${heavy}}${word}{\\1c${tagColor(look.color)}${back}}`;
+          return heavy ? `{${heavy}}${word}{${back}}` : word;
         });
-        dialogue(start, end, "Caption", `{${pos}${fs}${soft}${k === 0 ? "\\fad(60,0)" : ""}}${join(parts)}`);
+        const text = join(parts);
+        const fill = hollow ? "\\1a&HFF&" : "";
+        if (look.glow) {
+          // The glow underneath: a wide, blurred outline in the accent colour, wider on the spoken word.
+          const glow = words.map((word, i) => (i === k ? `{\\bord${(0.16 * size).toFixed(1)}}${word}{\\bord${(0.1 * size).toFixed(1)}}` : word));
+          dialogue(start, end, "Caption", `{${pos}${fs}${k === 0 ? fad : ""}\\1a&HFF&\\3c${tagColor(look.accent)}\\3a&H30&\\bord${(0.1 * size).toFixed(1)}\\blur${Math.round(0.12 * size)}\\shad0}${join(glow)}`, 0);
+        }
+        dialogue(start, end, "Caption", `{${pos}${fs}${soft}${fill}${k === 0 ? fad : ""}}${text}`);
       });
     }
 
-    // The emoji pops in above the caption when its keyword (or the line) starts, and stays at least 1.1 s. At least 3 s
-    // apart and one per 7 s at most, like the punch-ins.
+    // The emoji pops in by the caption when its keyword (or the line) starts, and stays at least 1.1 s. At least 3 s
+    // apart and one per 7 s at most, like the punch-ins. Above the caption, or below it when captions are at the top.
     const at = line.keyword !== null ? g.words[line.keyword].start : g.start;
     if (line.emoji && at - (emojis[emojis.length - 1]?.start ?? -Infinity) >= 3 && emojis.length < Math.ceil(duration / 7)) {
-      const lineHeight = size * scale * 1.05;
-      const y = look.anchor === "top" ? top - 0.012 * H - emojiSize : bottom - lineHeight * lines.length - 0.01 * H - emojiSize;
+      const block = lineHeight * scale * lines.length;
+      const y = look.position === "top" ? top + block + 0.015 * H : anchor === "top" ? top - 0.012 * H - emojiSize : bottom - block - 0.01 * H - emojiSize;
       const end = Math.min(duration, Math.max(at + 1.1, g.end));
       if (end - at > 0.4) emojis.push({ emoji: line.emoji, start: round(at), end: round(end), x: Math.round(x - emojiSize / 2), y: Math.round(y), size: emojiSize });
     }
@@ -592,11 +693,9 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
 
   if (plan.hook) {
     const words = plan.hook.toLocaleUpperCase("en").split(" ").map(assText);
-    const { lines, scale } = lineBreak(words, "Inter Black", hookSize, W * 0.8);
+    const { lines, scale } = lineBreak(words, FACES["Inter Black"], hookSize, W * 0.8);
     const text = lines.map((l) => l.join(" ")).join("\\N");
     const end = Math.min(2.6, duration - 0.1);
-    // Below the free-plan mark when there is one, so the two never touch.
-    const hookY = Math.round(Math.max(layout.hookTop * H, spec.watermark ? layout.markTop * H + markSize * 2.4 : 0));
     dialogue(
       0.1,
       end,
@@ -861,8 +960,8 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
   const band: [number, number] = tall ? [Math.max(0.14, below), 0.47] : [Math.max(layout.hookTop, below), layout.captionTop - 0.04];
   const x = Math.round(W / 2);
   const styles = [
-    // In front: the rest of the line, white with a soft dark halo, as in Clean.
-    `Style: Sub,${look.font},${size},${assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000", 0x50)},${assColor("#000000", 0x70)},0,0,0,0,100,100,0,0,1,${(0.09 * size).toFixed(1)},${(0.05 * size).toFixed(1)},8,0,0,0,1`,
+    // In front: the rest of the line, in the look's font and colour with a soft dark halo, as in Clean.
+    `Style: Sub,${faceOf(look).family},${size},${assColor(look.color)},${assColor(look.color)},${assColor("#000000", 0x50)},${assColor("#000000", 0x70)},0,${faceOf(look).italic ? -1 : 0},0,0,100,100,0,0,1,${(0.09 * size).toFixed(1)},${(0.05 * size).toFixed(1)},8,0,0,0,1`,
     // The big words: face, size, colour, blur and the soft shadow (a second, blurred black copy) are set on each event,
     // as a reel can mix font styles.
     `Style: Big,${first.family},100,${assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000")},${assColor("#000000")},0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
@@ -944,17 +1043,19 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
     const rest = g.words.map((_, i) => i).filter((i) => i !== heroes.get(gi));
     if (!rest.length) return;
     const words = rest.map((i) => shown(g.words[i].text, look));
-    const { lines, scale } = lineBreak(words, look.font, size, max);
+    const { lines, scale } = lineBreak(words, faceOf(look), size, max);
     const fs = scale < 1 ? `\\fs${Math.floor(size * scale)}` : "";
-    const [bw, bh] = [Math.max(...lines.map((l) => textWidth(l.join(" "), look.font, size * scale))), lines.length * size * scale * 1.1];
+    const [bw, bh] = [Math.max(...lines.map((l) => advance(faceOf(look), l.join(" "), size * scale))), lines.length * size * scale * 1.1];
     const { G, face, faceTotal } = layers(seg, g.start, g.end);
     const cover = (t: number) => onFace(face, faceTotal, G, frame, (W - bw) / 2, t, bw, bh);
-    let top = layout.captionTop * H;
+    // "Bottom" puts it at the foot of the safe box; "top" would meet the big words, so it counts as the middle.
+    const home = look.position === "bottom" ? layout.captionBottom * H - bh : layout.captionTop * H;
+    let top = home;
     if (cover(top) > 0.02 && lastTop !== null && cover(lastTop) <= 0.02) top = lastTop;
     else if (cover(top) > 0.02) {
       let best = Infinity;
       for (let t = layout.captionTop * H; t + bh <= layout.captionBottom * H; t += H / 200) {
-        const cost = 20 * cover(t) + (0.4 * (t - layout.captionTop * H)) / H;
+        const cost = 20 * cover(t) + (0.4 * Math.abs(t - home)) / H;
         if (cost < best) [best, top] = [cost, t];
       }
     }
@@ -1242,9 +1343,10 @@ async function main() {
 
     // 2. Captions and the edit plan, a beat ahead of the voice (the SRT keeps the true timings).
     const style = spec.options.style;
-    const look = LOOKS[style];
+    const look = lookFor(style, spec.options.look);
     const cued = words.map((w) => ({ ...w, start: round(Math.max(0, w.start - LEAD)), end: round(Math.max(0.05, w.end - LEAD)) }));
-    const groups = groupWords(cued, new Set(), look.limits);
+    // "One word" shows each word on its own (groupWords would join a lone last word to its line).
+    const groups = look.words === 1 ? singles(cued, look.limits) : groupWords(cued, new Set(), look.limits);
     const plan = await llmPlan(groups, duration, spec.options, spec.model).catch((err: Error) => {
       log(`planner failed (${redact(err.message).slice(0, 200)}); using the heuristic plan`);
       return heuristicPlan(groups, spec.options);
@@ -1269,7 +1371,7 @@ async function main() {
       writeFileSync(behind.file, built.behind);
       placements = built.placements;
     } else {
-      const built = buildAss(groups, plan, look, frame, style, spec, duration);
+      const built = buildAss(groups, plan, look, frame, spec, duration);
       writeFileSync(assFile, built.ass);
       emojis = built.emojis;
     }

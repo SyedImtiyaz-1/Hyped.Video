@@ -17,10 +17,12 @@ All six come from Google Fonts' repository, [google/fonts](https://github.com/go
 `9710da1eacb3be272583c3224dcb70f9da6eadbb`. Each font's licence file is next to it. The web app shows previews with copies
 in `web/components/reels/fonts`.
 
-To add a font: put the file here and its copy in the web folder, then regenerate the measurements the placement uses
-(`src/fonts.ts`) from all the fonts, Inter Black included:
+The same fonts are the caption fonts every style can switch to (`CAPTION_FONTS` in `packages/core/src/captions.ts`).
+
+To add a font: put the file here and its copy in the web folder, then regenerate the measurements captions and big
+words are fitted with (`src/fonts.ts`) from all the fonts, Inter's four weights included:
 
 ```bash
-docker run --rm --entrypoint cat <render image> /usr/share/fonts/opentype/inter/Inter-Black.otf > Inter-Black.otf
-python3 scripts/font-metrics.py Inter-Black.otf runner/fonts/*.ttf
+for w in Black ExtraBold SemiBold Medium; do docker run --rm --entrypoint cat <render image> /usr/share/fonts/opentype/inter/Inter-$w.otf > Inter-$w.otf; done
+python3 scripts/font-metrics.py Inter-Black.otf Inter-ExtraBold.otf Inter-SemiBold.otf Inter-Medium.otf runner/fonts/*.ttf
 ```
