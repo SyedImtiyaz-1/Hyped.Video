@@ -1,5 +1,5 @@
 "use client";
-import { ArrowRight, Mic, MicOff, Plus } from "lucide-react";
+import { ArrowRight, Mic, MicOff, Play, Plus, Square } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { creditsFor } from "@launchreel/core/pricing";
@@ -7,6 +7,7 @@ import { TEMPLATE_GOALS, TEMPLATES, type Template, type TemplateGoal } from "@la
 import { voiceById } from "@launchreel/core/voices";
 import { cn } from "@/lib/cn";
 import { plural } from "@/lib/format";
+import { showcaseFor, videoSrc } from "@/lib/showcase";
 
 const RATIO: Record<Template["format"], string> = { landscape: "16:9", vertical: "9:16", square: "1:1" };
 
@@ -63,17 +64,53 @@ export function TemplateGallery({ url }: { url?: string }) {
 export function TemplateCard({ template: t, href }: { template: Template; href: string }) {
   const beats = t.beats;
   const voice = voiceById(t.voice);
+  // A video Hyped made with this template plays over the storyboard: on hover with a mouse, or with the button.
+  const example = showcaseFor(t.id);
+  const [preview, setPreview] = useState(false);
+  const [shown, setShown] = useState(false);
+  const stop = () => {
+    setPreview(false);
+    setShown(false);
+  };
   return (
-    <div className="group flex flex-col overflow-hidden rounded-xl border border-gray-alpha-400 bg-background-100 transition-colors hover:border-gray-alpha-500">
+    <div
+      onPointerEnter={(e) => example && e.pointerType === "mouse" && setPreview(true)}
+      onPointerLeave={(e) => e.pointerType === "mouse" && stop()}
+      className="group flex flex-col overflow-hidden rounded-xl border border-gray-alpha-400 bg-background-100 transition-colors hover:border-gray-alpha-500"
+    >
       {/* A storyboard of the recipe, in its own frame shape. */}
       <div className="relative flex aspect-[16/10] items-center justify-center overflow-hidden border-b border-gray-alpha-400 bg-background-200 p-4">
         <div aria-hidden className="pointer-events-none absolute inset-0 [background-image:radial-gradient(circle_at_30%_20%,var(--ds-gray-alpha-200),transparent_60%)]" />
+        {example && (
+          <button
+            type="button"
+            onClick={() => (preview ? stop() : setPreview(true))}
+            aria-pressed={preview}
+            aria-label={preview ? `Stop the ${t.name} example` : `Play an example made with ${t.name}`}
+            className="absolute bottom-2 right-2 z-10 inline-flex h-7 items-center gap-1 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2.5 text-[11px] font-medium text-gray-1000 backdrop-blur-sm transition-colors hover:border-gray-1000"
+          >
+            {preview ? <Square className="size-3" fill="currentColor" /> : <Play className="size-3" fill="currentColor" />}
+            Example
+          </button>
+        )}
         <div
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-gray-alpha-400 bg-background-100 p-3 shadow-sm",
             t.format === "landscape" ? "aspect-video w-[88%]" : t.format === "vertical" ? "aspect-[9/16] h-full" : "aspect-square h-full",
           )}
         >
+          {preview && example && (
+            <video
+              src={videoSrc(example)}
+              autoPlay
+              muted
+              loop
+              playsInline
+              onPlaying={() => setShown(true)}
+              aria-label={`Example made with ${t.name}`}
+              className={cn("absolute inset-0 z-10 size-full bg-black object-cover transition-opacity duration-300", shown ? "opacity-100" : "opacity-0")}
+            />
+          )}
           <span className="text-[10px] font-medium uppercase tracking-wider text-gray-900">{TEMPLATE_GOALS.find((g) => g.value === t.goal)?.label}</span>
           <span className={cn("mt-1 font-semibold leading-tight tracking-tight", t.format === "vertical" ? "text-sm" : "text-base")}>{t.name}</span>
           <div className="mt-auto space-y-1">

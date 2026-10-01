@@ -28,6 +28,9 @@
     "dev:credits": "npm -w runner run dev:credits --",
     "dev:reset": "node scripts/dev-reset.mjs",
     "deploy:render": "npm -w runner run build && npm -w render run deploy",
-    "deploy:web": "node scripts/deploy-web.mjs"
+    "deploy:web": "node scripts/deploy-web.mjs",
+    "music:add": "node scripts/music-add.mjs",
+    "openai-key": "node scripts/model-key.mjs openai",
+    "anthropic-key": "node scripts/model-key.mjs anthropic"
   }
 }

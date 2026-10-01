@@ -5,9 +5,14 @@ instead of synthesizing audio: a real track and a few real effects sound far bet
 
 ## Music (`music/`)
 
-Five upbeat tracks at 110–120 BPM, from the "Happy Beats / Business Moves" series by Sascha Ende
-([ende.app](https://ende.app/en)), licensed CC BY 4.0. Commercial use is allowed, and the composer waives the
-credit requirement (credit is appreciated, not required).
+Tracks by Sascha Ende ([ende.app](https://ende.app/en)), licensed CC BY 4.0. Commercial use is allowed, the
+composer waives the credit requirement (credit is appreciated, not required), and his music is not registered with
+Content ID, so customers' uploads don't get claimed.
+
+`music/library.json` lists every track with its moods (best fit first), tempo and length. The runner picks one per
+video from it (`runner/src/music.ts`): by the tone, then the template, then the video type, long enough for the
+video, and rotated per customer. When the brief names a track, use that one. Only when it names none, choose from
+the table below.
 
 | File | Length | Tempo |
 |---|---|---|

@@ -6,7 +6,7 @@ import { parseReel, reelError } from "@launchreel/core/reel";
 import { ArrowUpRight, Captions, Download, GitBranch, Globe, Upload } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { REEL_LANGUAGE_LABEL, REEL_STYLE_INFO, reelExtras } from "@/components/reels/labels";
+import { REEL_LANGUAGE_LABEL, REEL_STYLE_INFO, reelExtras, reelName } from "@/components/reels/labels";
 import { ReelPreview } from "@/components/reels/reel-preview";
 import { AutoRefresh } from "@/components/video/auto-refresh";
 import { ReviseForm } from "@/components/video/revise-form";
@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/copy-button";
 import { PageBody, PageHeader } from "@/components/ui/page";
 import { STATUS } from "@/components/ui/status";
+import { BRAND } from "@/lib/brand";
 import { cn } from "@/lib/cn";
 import { getVideo } from "@/lib/data";
 import { FORMAT_LABEL, formatDateTime, formatDuration, hostOf, QUALITY_LABEL, renderSeconds, shortId, toneLabel } from "@/lib/format";
@@ -46,7 +47,13 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
       <PageHeader
         title={
           <span className="flex flex-wrap items-center gap-3">
-            {reel ? <span className="min-w-0 break-all">{reel.fileName}</span> : hostOf(job.sourceUrl)}
+            {reel ? (
+              <span className="min-w-0 [overflow-wrap:anywhere]" title={reel.fileName}>
+                {reelName(reel.fileName)}
+              </span>
+            ) : (
+              hostOf(job.sourceUrl)
+            )}
             {reel && (
               <Badge tone="purple" size="md">
                 Reel
@@ -71,7 +78,8 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
         actions={
           job.videoUrl && (
             <>
-              <CopyButton value={job.videoUrl} label="Copy link" size="md" />
+              {/* The share page previews well on X, LinkedIn and WhatsApp; Download still gives the file itself. */}
+              <CopyButton value={`${BRAND.url}/v/${job.id}`} label="Copy share link" size="md" />
               {job.captionsUrl && (
                 <a href={job.captionsUrl} download className={buttonClasses({})}>
                   <Captions />
@@ -129,9 +137,9 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
                 {reel ? (
                   <>
                     <Row label="Source">
-                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5" title={reel.fileName}>
                         <Upload className="size-4 shrink-0 text-gray-900" />
-                        <span className="truncate">{reel.fileName}</span>
+                        <span className="min-w-0 truncate">{reelName(reel.fileName)}</span>
                       </span>
                     </Row>
                     <Row label="Captions">
@@ -142,22 +150,23 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
                 ) : (
                   <>
                     <Row label="Source">
-                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5" title={job.sourceUrl}>
                         {job.sourceType === "GITHUB" ? <GitBranch className="size-4 shrink-0 text-gray-900" /> : <Globe className="size-4 shrink-0 text-gray-900" />}
-                        <span className="truncate">{hostOf(job.sourceUrl)}</span>
+                        <span className="min-w-0 truncate">{hostOf(job.sourceUrl)}</span>
                       </span>
                     </Row>
                     <Row label="Quality">{QUALITY_LABEL[job.quality] ?? "Standard"}</Row>
-                    <Row label="Voiceover">
-                      {voiceById(job.voice) ? `${voiceById(job.voice)!.name} · ${job.captions ? "captions burned in" : "no burned-in captions"}` : "None"}
-                    </Row>
+                    <Row label="Voiceover">{voiceById(job.voice) ? `${voiceById(job.voice)!.name} · ${job.captions ? "captions burned in" : "no burned-in captions"}` : "None"}</Row>
                     <Row label="Tone">{toneLabel(job.tone)}</Row>
                   </>
                 )}
                 <Row label="Format">
                   {FORMAT_LABEL[job.format] ?? job.format} · {job.durationSec}s
                 </Row>
-                <Row label="Credits">{job.creditsCost}{job.status === "FAILED" && <span className="text-gray-900"> · refunded</span>}</Row>
+                <Row label="Credits">
+                  {job.creditsCost}
+                  {job.status === "FAILED" && <span className="text-gray-900"> · refunded</span>}
+                </Row>
                 {job.watermark && <Row label="Watermark">Free trial</Row>}
                 {parent && (
                   <Row label="Revision of">

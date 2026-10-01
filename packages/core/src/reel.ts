@@ -4,9 +4,13 @@
 // No Prisma here: the browser and the container import it.
 import { customerError } from "./engines";
 
-/** Caption looks: Hormozi-style bold words, clean sentences, a karaoke fill, or small lowercase in the lower third. */
-export type ReelStyle = "bold" | "clean" | "karaoke" | "minimal";
-export const REEL_STYLES: readonly ReelStyle[] = ["bold", "clean", "karaoke", "minimal"];
+/**
+ * Caption looks: Hormozi-style bold words, clean sentences, a karaoke fill, small lowercase in the lower third, or
+ * "behind": the hook and each line's key word huge and behind the speaker (their cut-out drawn back on top), with
+ * clean captions in front.
+ */
+export type ReelStyle = "bold" | "clean" | "karaoke" | "minimal" | "behind";
+export const REEL_STYLES: readonly ReelStyle[] = ["bold", "behind", "clean", "karaoke", "minimal"];
 
 /**
  * What the captions are written in. "auto" follows the speech; "hinglish" (beta) writes Hindi and English speech in

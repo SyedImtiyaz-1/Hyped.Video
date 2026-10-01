@@ -185,15 +185,22 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
           <div>
             <Label>Extras</Label>
             <div className="grid gap-2 sm:grid-cols-2">
-              {EXTRAS.map((x) => (
-                <label key={x.key} className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-alpha-400 p-3 text-sm transition-colors hover:bg-gray-alpha-100">
-                  <input type="checkbox" checked={options[x.key]} onChange={(e) => setOptions((o) => ({ ...o, [x.key]: e.target.checked }))} className="mt-0.5 size-4 shrink-0 accent-[var(--ds-gray-1000)]" />
+              {EXTRAS.map((x) => {
+                // "Behind you" has no emojis: its big words carry the emphasis (runner/src/reel.ts).
+                const off = x.key === "emojis" && options.style === "behind";
+                return (
+                <label
+                  key={x.key}
+                  className={cn("flex items-start gap-3 rounded-lg border border-gray-alpha-400 p-3 text-sm transition-colors", off ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-gray-alpha-100")}
+                >
+                  <input type="checkbox" disabled={off} checked={off ? false : options[x.key]} onChange={(e) => setOptions((o) => ({ ...o, [x.key]: e.target.checked }))} className="mt-0.5 size-4 shrink-0 accent-[var(--ds-gray-1000)]" />
                   <span className="min-w-0">
                     <span className="block font-medium text-gray-1000">{x.label}</span>
-                    <span className="mt-0.5 block text-xs leading-relaxed text-gray-900">{x.hint}</span>
+                    <span className="mt-0.5 block text-xs leading-relaxed text-gray-900">{off ? "Off with Behind you: the big words do the emphasis" : x.hint}</span>
                   </span>
                 </label>
-              ))}
+                );
+              })}
             </div>
           </div>
 

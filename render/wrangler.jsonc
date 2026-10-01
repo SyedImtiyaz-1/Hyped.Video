@@ -91,8 +91,17 @@
 		"STUDIO_MODEL": "claude-opus-5-5",
 		"CLAUDE_EFFORT": "medium",
 		"MAX_COST_PER_JOB_USD": "8",
-		"MAX_TURNS": "150"
+		"MAX_TURNS": "150",
+		// "Your video is ready" emails (src/email.ts): links point at the web app, replies go to the support inbox.
+		"APP_URL": "https://hyped.video",
+		"EMAIL_FROM": "videos@notify.hyped.video",
+		"SUPPORT_EMAIL": "contact@hyped.video",
+		// Where a failed or stalled render is reported (src/email.ts sendFailureAlert).
+		"ALERT_EMAIL": "contact@hyped.video"
 	},
+	// Cloudflare Email Sending, from notify.hyped.video (its own SPF, DKIM and DMARC, apart from the root domain's
+	// Hostinger mail). The binding can only send as EMAIL_FROM.
+	"send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["videos@notify.hyped.video"] }],
 	// Secrets (npx wrangler secret put ANTHROPIC_API_KEY / OPENAI_API_KEY): used only by the egress handlers,
 	// never sent into containers.
 	"observability": {

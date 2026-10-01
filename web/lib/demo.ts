@@ -16,7 +16,7 @@ const SAMPLE = "https://latent-spaces.github.io/brag/examples";
 export const demoUser = (): User => ({
   id: DEMO_USER_ID,
   email: "you@example.com",
-  credits: 14, // the demo ledger: 5 trial + 3 + 12 bought + 1 refunded − 7 used
+  credits: 13, // the demo ledger: 5 trial + 3 + 12 bought + 1 refunded − 8 used
   plan: "FREE",
   billingCustomerId: "cus_demo",
   billingSubscriptionId: null,
@@ -47,6 +47,14 @@ Outro (17-20s)     "Taxi for Taxis. Launching today." + URL
 Tone: yc-parody | Format: 1920x1080, 30fps | Music: upbeat, ~118 BPM`;
 
 export const demoJobs = (): Job[] => [
+  // A reel: the customer's own video, captioned. Its long, downloader-style file name keeps the layouts honest.
+  job({
+    id: "cmgk2reel0000008", kind: "reel", status: "SUCCEEDED", sourceType: "UPLOAD", sourceUrl: "SaveClip.App_AQOpAJwH-yLE8ZtiyXZtFrO2TlQZv5b_g9Z8__SUBQ5Wy9PXTColfGCsHRvA1OUsepdn3xb2tlmXKHQ9nhdM2H9JPR91UdtAaQLeGoc.mp4",
+    format: "vertical", durationSec: 58, music: "none", creditsCost: 1,
+    reel: { style: "bold", emojis: true, zooms: true, sfx: true, hook: true, language: "auto", key: "uploads/demo/reel.mp4", fileName: "SaveClip.App_AQOpAJwH-yLE8ZtiyXZtFrO2TlQZv5b_g9Z8__SUBQ5Wy9PXTColfGCsHRvA1OUsepdn3xb2tlmXKHQ9nhdM2H9JPR91UdtAaQLeGoc.mp4", bytes: 24_000_000, durationSec: 58, width: 1080, height: 1920 },
+    videoUrl: `${SAMPLE}/horse-tinder/brag.mp4`, posterUrl: `${SAMPLE}/horse-tinder/brag.jpg`,
+    createdAt: ago(3), startedAt: ago(3), finishedAt: ago(2), computeSeconds: 70, llmCostUsd: 0.001,
+  }),
   job({ id: "cmgk2h8n4orbit01", status: "RUNNING", sourceType: "WEBSITE", sourceUrl: "https://orbitnotes.app", tone: "polished", createdAt: ago(6), startedAt: ago(5) }),
   job({ id: "cmgk2h9q1rocket2", status: "QUEUED", sourceType: "GITHUB", sourceUrl: "https://github.com/acme/rocket-cli", tone: "yc-parody", format: "vertical", createdAt: ago(1) }),
   job({
@@ -86,6 +94,7 @@ const entry = (id: string, delta: number, reason: string, minutesAgo: number): C
 
 // Sums to demoUser.credits (11).
 export const demoLedger = (): CreditEntry[] => [
+  entry("l12", -1, "job:cmgk2reel0000008", 3),
   entry("l11", -1, "job:cmgk2h9q1rocket2", 1),
   entry("l10", -1, "job:cmgk2h8n4orbit01", 6),
   entry("l09", -1, "job:cmgk1z7taxirev03", 70),

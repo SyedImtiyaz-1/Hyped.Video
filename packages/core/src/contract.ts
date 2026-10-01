@@ -45,6 +45,11 @@ export type BragRequest = {
   captions?: boolean;
   /** The template this video started from (TEMPLATES in templates.ts): its beats shape the story. */
   template?: string | null;
+  /**
+   * Rotates the music library per customer: the render Worker sends a number that goes up by one with each of the
+   * customer's videos, so back-to-back videos get different tracks (runner/src/music.ts).
+   */
+  musicSeed?: number | null;
 };
 
 /** Written by the render Worker to /workspace/job.json. */

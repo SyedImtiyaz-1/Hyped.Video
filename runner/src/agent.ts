@@ -8,6 +8,7 @@ import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runClaude } from "./claude.ts";
 import { runCodex } from "./codex.ts";
+import { loadLibrary, pickTrack, trackBrief } from "./music.ts";
 import { PROVIDER_VOICES } from "./voice-provider.ts";
 
 export type { BragRequest, Engine };
@@ -76,6 +77,13 @@ const SOUND_BRIEF: Record<MusicChoice, string> = {
   none: "Sound: no music. Use at most a few subtle sound effects from .hyped/audio/sfx for key moments (see .hyped/audio/README.md), or none.",
 };
 
+/** The sound line: for library music, the track picked for this video (music.ts); otherwise the choice's own line. */
+function soundBrief(req: BragRequest): string {
+  const music = req.music ?? "upbeat";
+  const track = music === "upbeat" ? pickTrack(req, loadLibrary(AUDIO_DIR)) : null;
+  return track ? trackBrief(track) : SOUND_BRIEF[music];
+}
+
 /**
  * Voiceover: the agent writes the words; the voice tool records them with the customer's voice, times every word,
  * lays out the voice track and captions, and mixes. Scenes follow the voice, not the other way round.
@@ -138,6 +146,8 @@ const LONG_VIDEO_BRIEF = [
  * finds a finished video on the site may just re-cut it with ffmpeg captions: a slideshow, not a launch video.
  */
 const CRAFT_RULES = [
+  // Every feed judges a video in its first 3 seconds (TikTok, Instagram and YouTube all say so).
+  "Hook: by second 3 the viewer sees the product's real UI or the result it produces, with the hook line on screen. Never open on a logo, a title card or an empty frame; the logo and URL belong at the end.",
   "How to build it (required): make every scene an animated HTML page and capture it frame by frame in headless Chromium with Playwright, each frame a pure function of time. Use ffmpeg only to encode frames, mix audio and join clips. Never draw text, boxes or title cards with ffmpeg filters such as drawtext or drawbox, and never make a slideshow of static cards.",
   "Type: use the product's own web fonts (download the font files the site or project loads). If you can't get them, use Inter, which is installed. Never let text fall back to a default system font such as DejaVu.",
   "Motion: every scene moves. Headlines and UI elements animate in one by one, the product is shown in use (typing, cursor clicks, results appearing), the camera eases in on what matters, and scenes change with designed transitions rather than plain cuts between static frames.",
@@ -168,7 +178,7 @@ export function buildPrompt(req: BragRequest, engine: Engine): string {
         ...templateBrief(req),
         ...briefLines(req.brief),
         req.notes ? `Direction from the customer: ${req.notes}` : "",
-        SOUND_BRIEF[req.music ?? "upbeat"],
+        soundBrief(req),
         ...voiceBrief(req),
       ];
   return [
