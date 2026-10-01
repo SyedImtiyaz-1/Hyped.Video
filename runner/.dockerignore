@@ -1,0 +1,4 @@
+# The render image copies skills/, audio/ and tools/ whole: never let a local tool environment ride along.
+**/.venv
+**/__pycache__
+**/node_modules

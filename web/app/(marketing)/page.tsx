@@ -2,10 +2,12 @@ import { ArrowRight, AudioLines, Captions, Check, Clapperboard, FileText, Gift, 
 import { PACKS, QUALITY_CREDIT_MULTIPLIER, TEMPLATES, TRIAL_CREDITS, perCredit, templateById, type Template } from "@launchreel/core";
 import { CreditTable } from "@/components/credit-table";
 import { PackCards, PriceNote, cheapestPack } from "@/components/pricing/pack-cards";
+import { ShowcaseGallery } from "@/components/showcase/showcase-gallery";
 import { TemplateCard } from "@/components/templates/template-gallery";
 import { ButtonLink } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { visitorCurrency } from "@/lib/region";
+import { HERO, SHOWCASE, posterSrc, videoSrc } from "@/lib/showcase";
 import { studioAvailable } from "@/lib/studio";
 
 const STEPS = [
@@ -87,26 +89,32 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
           </div>
           <p className="mt-4 text-[13px] text-gray-900">5 free credits. No card required.</p>
 
-          <div className="relative mx-auto mt-16 max-w-4xl">
-            <div aria-hidden className="pointer-events-none absolute -inset-x-8 -inset-y-6 rounded-[40px] bg-brand/15 blur-[90px]" />
-            <div className="relative overflow-hidden rounded-2xl border border-gray-alpha-400 bg-background-200 shadow-[0_24px_80px_-24px_rgb(0_0_0/0.9)]">
-              <video
-                src="/examples/bidthe1-launch.mp4"
-                poster="/examples/bidthe1-launch.jpg"
-                autoPlay
-                muted
-                loop
-                playsInline
-                controls
-                preload="metadata"
-                aria-label="Example launch video: bidthe1.com"
-                className="block aspect-video w-full"
-              />
+          {HERO && (
+            <div className="relative mx-auto mt-16 max-w-4xl">
+              <div aria-hidden className="pointer-events-none absolute -inset-x-8 -inset-y-6 rounded-[40px] bg-brand/15 blur-[90px]" />
+              <div className="relative overflow-hidden rounded-2xl border border-gray-alpha-400 bg-background-200 shadow-[0_24px_80px_-24px_rgb(0_0_0/0.9)]">
+                <video
+                  src={videoSrc(HERO)}
+                  poster={posterSrc(HERO)}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  controls
+                  preload="metadata"
+                  aria-label={`Example launch video: ${HERO.product}`}
+                  className="block aspect-video w-full"
+                />
+              </div>
+              <p className="mt-4 text-[13px] text-gray-900">
+                The launch film Hyped made for{" "}
+                <a href={`https://${HERO.product}`} target="_blank" rel="noreferrer" className="text-gray-1000 underline-offset-2 hover:underline">
+                  {HERO.product}
+                </a>{" "}
+                from its live site, with voiceover and captions. Unmute to hear it.
+              </p>
             </div>
-            <p className="mt-4 text-[13px] text-gray-900">
-              The launch film for <span className="text-gray-1000">bidthe1.com</span>, with voiceover and captions. Unmute to hear it.
-            </p>
-          </div>
+          )}
 
           <ul className="mx-auto mt-10 flex max-w-3xl flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-900">
             {SPECS.map((s) => (
@@ -137,6 +145,18 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
           ))}
         </div>
       </section>
+
+      {SHOWCASE.length > 0 && (
+        <section id="examples" className="mx-auto max-w-[1200px] px-4 pb-20 md:px-8">
+          <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Made with Hyped</h2>
+          <p className="mt-3 max-w-2xl text-gray-900">
+            Each of these came straight out of Hyped from a real product&apos;s site or repo, with no hand editing. Play one to watch it with sound.
+          </p>
+          <div className="mt-8">
+            <ShowcaseGallery />
+          </div>
+        </section>
+      )}
 
       <section id="templates" className="mx-auto max-w-[1200px] px-4 pb-20 md:px-8">
         <div className="flex flex-wrap items-end justify-between gap-4">

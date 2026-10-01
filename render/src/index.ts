@@ -14,6 +14,7 @@
 import { getSandbox, Sandbox } from "@cloudflare/sandbox";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
+import { sendFailureAlert, sendJobEmail } from "./email";
 import {
   createDb,
   grantCredits,
@@ -127,6 +128,9 @@ function limitBytes(max: number) {
   });
 }
 
+/** A stable number per customer (FNV-1a), so every customer's first video doesn't start on the same track. */
+const seedFor = (userId: string) => [...userId].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261) % 997;
+
 const sandboxFor = (env: Env, jobId: string) =>
   // Container sleeps after 15 idle minutes, so an orphaned render can't run up a bill.
   getSandbox(env.Sandbox, jobId.toLowerCase(), { sleepAfter: "15m" });
@@ -148,7 +152,10 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
       if (!j) throw new NonRetryableError(`Job ${jobId} not found`);
       if (j.status === "SUCCEEDED" || j.status === "FAILED") return null; // duplicate start
       await db.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: j.startedAt ?? new Date(), attempts: { increment: 1 } } });
+      // The music rotation moves one track on with each of this customer's videos (runner/src/music.ts).
+      const earlier = j.kind === "video" ? await db.job.count({ where: { userId: j.userId, kind: "video", createdAt: { lt: j.createdAt } } }) : 0;
       return {
+        musicSeed: seedFor(j.userId) + earlier,
         userId: j.userId,
         sourceType: j.sourceType,
         sourceUrl: j.sourceUrl,
@@ -209,6 +216,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
             voice: (job.voice ?? null) as JobSpec["request"]["voice"],
             captions: job.captions,
             template: job.template ?? null,
+            musicSeed: job.musicSeed,
           },
           engine,
           model,
@@ -334,9 +342,30 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
       });
     }
 
+    await this.emailCustomer(jobId, step);
     await step.do("destroy sandbox", async () => {
       await sandboxFor(this.env, jobId).destroy();
     });
+  }
+
+  /**
+   * Tells the customer the job is done (ready, or failed with the credits back) and, when it failed, the owner too.
+   * Separate steps, so a retried alert never re-sends the customer's email. An email failure never fails the job.
+   */
+  private async emailCustomer(jobId: string, step: WorkflowStep) {
+    const retry = { retries: { limit: 2, delay: "20 seconds", backoff: "exponential" }, timeout: "1 minute" } as const;
+    let status: string | null = null;
+    try {
+      status = await step.do("email the customer", retry, async () => sendJobEmail(this.env, createDb(this.env.HYPERDRIVE.connectionString), jobId));
+    } catch (err) {
+      console.error(`job ${jobId}: email not sent: ${redactSecrets(String(err)).slice(0, 300)}`);
+    }
+    if (status === "SUCCEEDED") return; // unknown (the email step gave up) still alerts: the alert checks the status itself
+    try {
+      await step.do("alert the owner", retry, async () => sendFailureAlert(this.env, createDb(this.env.HYPERDRIVE.connectionString), jobId));
+    } catch (err) {
+      console.error(`job ${jobId}: alert not sent: ${redactSecrets(String(err)).slice(0, 300)}`);
+    }
   }
 
   /**
@@ -457,6 +486,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
       });
     }
 
+    await this.emailCustomer(jobId, step);
     await step.do("destroy sandbox", async () => {
       await sandboxFor(this.env, jobId).destroy();
     });
@@ -598,6 +628,8 @@ export default {
       await db.job.update({ where: { id: job.id }, data: { status: "FAILED", error: "Render timed out", finishedAt: new Date() } });
       await grantCredits(db, job.userId, job.creditsCost, `refund:${job.id}`, `refund:${job.id}`);
       await sandboxFor(env, job.id).destroy().catch(() => {});
+      await sendJobEmail(env, db, job.id).catch((err) => console.error(`job ${job.id}: email not sent: ${redactSecrets(String(err)).slice(0, 300)}`));
+      await sendFailureAlert(env, db, job.id).catch((err) => console.error(`job ${job.id}: alert not sent: ${redactSecrets(String(err)).slice(0, 300)}`));
     }
   },
 } satisfies ExportedHandler<Env>;

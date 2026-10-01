@@ -18,7 +18,18 @@ function toApex(req: NextRequest) {
   return NextResponse.redirect(new URL(pathname + search, BRAND.url), 308);
 }
 
-export default demo ? () => NextResponse.next() : (req: NextRequest, event: NextFetchEvent) => toApex(req) ?? clerk(req, event);
+// The workers.dev address stays up as a fallback for the custom domain, but out of search results: one site, one address.
+async function handle(req: NextRequest, event: NextFetchEvent) {
+  const apex = toApex(req);
+  if (apex) return apex;
+  const res = await clerk(req, event);
+  if (!req.headers.get("host")?.endsWith(".workers.dev")) return res;
+  const out = res ?? NextResponse.next();
+  out.headers.set("X-Robots-Tag", "noindex");
+  return out;
+}
+
+export default demo ? () => NextResponse.next() : handle;
 
 export const config = {
   matcher: ["/((?!_next|.*\\.(?:css|js|png|jpg|svg|ico|mp4|woff2?)).*)", "/(api|trpc)(.*)", "/__clerk/:path*"],

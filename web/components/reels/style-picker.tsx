@@ -19,6 +19,18 @@ function Sample({ style }: { style: ReelStyle }) {
         </span>
       </p>
     );
+  if (style === "behind")
+    return (
+      <span className="relative block size-full overflow-hidden">
+        <span className="absolute inset-x-0 top-[14%] text-center text-[28px] font-black uppercase leading-none tracking-tight text-white sm:text-[30px]">Money</span>
+        {/* The speaker, drawn over the word: the render puts their cut-out back on top the same way. */}
+        <span className="absolute left-1/2 top-[22%] aspect-square w-[34%] -translate-x-1/2 rounded-full bg-[#0b1020]" />
+        <span className="absolute left-1/2 top-[50%] h-[60%] w-[72%] -translate-x-1/2 rounded-t-[45%] bg-[#0b1020]" />
+        <span className="absolute inset-x-0 bottom-[9%] text-center text-[11px] font-semibold text-white" style={{ textShadow: "0 1px 6px rgb(0 0 0 / 0.75)" }}>
+          here&apos;s the <span style={{ color: YELLOW }}>secret</span>
+        </span>
+      </span>
+    );
   if (style === "clean")
     return (
       <p className="text-[13px] font-semibold leading-snug text-white" style={{ textShadow: "0 1px 6px rgb(0 0 0 / 0.75)" }}>
@@ -38,10 +50,10 @@ function Sample({ style }: { style: ReelStyle }) {
   );
 }
 
-/** The four caption looks, each with a small preview, as a radio group. */
+/** The caption looks, each with a small preview, as a radio group. */
 export function StylePicker({ value, onChange }: { value: ReelStyle; onChange: (style: ReelStyle) => void }) {
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3" role="radiogroup" aria-label="Caption style">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5" role="radiogroup" aria-label="Caption style">
       {/* The karaoke fill runs on a loop, unless the viewer asks for less motion. */}
       <style>{`.reel-karaoke{color:transparent;-webkit-background-clip:text;background-clip:text;background-size:200% 100%;background-position:100% 0}@media (prefers-reduced-motion:no-preference){.reel-karaoke{animation:reel-fill 2.4s linear infinite}}@keyframes reel-fill{from{background-position:100% 0}to{background-position:0 0}}`}</style>
       {REEL_STYLES.map((style) => {
@@ -60,7 +72,10 @@ export function StylePicker({ value, onChange }: { value: ReelStyle; onChange: (
             )}
           >
             <span
-              className={cn("flex aspect-[4/3] w-full justify-center px-2 text-center sm:aspect-[4/5]", style === "minimal" ? "items-end pb-4" : "items-center")}
+              className={cn(
+                "flex aspect-[4/3] w-full justify-center text-center sm:aspect-[4/5]",
+                style === "behind" ? "items-stretch" : style === "minimal" ? "items-end px-2 pb-4" : "items-center px-2",
+              )}
               style={{ background: "radial-gradient(60% 45% at 50% 22%, #6b7aa1 0%, transparent 70%), linear-gradient(160deg, #273150, #10141f)" }}
               aria-hidden
             >

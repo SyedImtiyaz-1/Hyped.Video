@@ -1,6 +1,7 @@
 import type { CreditEntry, Job, JobStatus } from "@launchreel/core";
 import { getDb } from "./db";
 import { demoJobs, demoLedger, isDemo } from "./demo";
+import { hostOf } from "./format";
 
 export type StatusFilter = "all" | "ready" | "rendering" | "queued" | "failed";
 
@@ -50,6 +51,17 @@ export async function getVideo(userId: string, id: string): Promise<{ job: Job; 
     db.job.findMany({ where: { parentJobId: id, userId }, orderBy: { createdAt: "desc" } }),
   ]);
   return { job, parent, revisions };
+}
+
+/** What a video's public share page (/v/<id>) may show: never a private repo's URL, never a reel's file name. */
+export type SharedVideo = Pick<Job, "id" | "kind" | "format" | "durationSec" | "posterUrl" | "template"> & { videoUrl: string; title: string };
+
+/** A finished video by id, for anyone with the link. Ids are unguessable, and the file itself is already public. */
+export async function getSharedVideo(id: string): Promise<SharedVideo | null> {
+  const job = isDemo ? demoJobs().find((j) => j.id === id) : await (await getDb()).job.findUnique({ where: { id } });
+  if (!job || job.status !== "SUCCEEDED" || !job.videoUrl) return null;
+  const title = job.kind === "reel" ? "A reel" : job.privateRepo ? "A product" : hostOf(job.sourceUrl);
+  return { id: job.id, kind: job.kind, format: job.format, durationSec: job.durationSec, videoUrl: job.videoUrl, posterUrl: job.posterUrl, template: job.template, title };
 }
 
 const DAY_MS = 86_400_000;
