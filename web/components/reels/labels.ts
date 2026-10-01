@@ -1,11 +1,18 @@
 import type { ReelFont, ReelJob, ReelLanguage, ReelStyle } from "@launchreel/core/reel";
 
-/** The caption looks as customers see them (previews in style-preview.tsx). */
+/** The caption styles as customers see them (previews in style-picker.tsx, the real thing in runner/src/reel.ts). */
 export const REEL_STYLE_INFO: Record<ReelStyle, { label: string; hint: string }> = {
   bold: { label: "Bold", hint: "Big uppercase words, the spoken one pops" },
   behind: { label: "Behind you", hint: "Big words behind you, captions in front" },
   clean: { label: "Clean", hint: "Sentence case, soft shadow" },
+  box: { label: "Box", hint: "Captions on a dark box" },
+  highlight: { label: "Highlighter", hint: "The spoken word on a marker" },
   karaoke: { label: "Karaoke", hint: "Words fill in as they're said" },
+  single: { label: "One word", hint: "One big word at a time" },
+  neon: { label: "Neon", hint: "Glowing letters" },
+  outline: { label: "Outline", hint: "Hollow letters, the spoken one filled" },
+  retro: { label: "Retro", hint: "Chunky type with a hard shadow" },
+  news: { label: "News bar", hint: "A lower-third bar, like TV news" },
   minimal: { label: "Minimal", hint: "Small lowercase, lower third" },
 };
 

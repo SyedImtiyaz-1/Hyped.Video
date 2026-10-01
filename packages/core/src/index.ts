@@ -8,4 +8,5 @@ export * from "./templates";
 export * from "./engines";
 export * from "@prisma/client";
 export * from "./repo-token";
+export * from "./captions";
 export * from "./reel";

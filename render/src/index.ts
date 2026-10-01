@@ -390,7 +390,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         const spec: ReelSpec = {
           jobId,
           input,
-          options: { style: reel.style, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language },
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language },
           // The container measures the real length: longer than the credits cover fails, and is refunded.
           maxSeconds: reelSecondsFor(job.creditsCost) + 1,
           watermark: job.watermark,

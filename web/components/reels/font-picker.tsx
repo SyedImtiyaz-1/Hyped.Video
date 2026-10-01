@@ -1,22 +1,13 @@
 "use client";
 import { Check } from "lucide-react";
-import localFont from "next/font/local";
 import { useState, type CSSProperties } from "react";
 import { REEL_FONTS, REEL_MAX_FONTS, type ReelFont } from "@launchreel/core/reel";
 import { cn } from "@/lib/cn";
+import { abril, anton, archivo, dmSerif, kaushan, marker } from "./caption-fonts";
 import { REEL_FONT_INFO } from "./labels";
 
-// The font files the render draws with (runner/fonts), so the preview shows what the reel gets. Classic and Outline
-// are Inter Black in the render; Geist at its heaviest stands in for it here.
-const anton = localFont({ src: "./fonts/Anton-Regular.ttf", display: "swap" });
-const abril = localFont({ src: "./fonts/AbrilFatface-Regular.ttf", display: "swap" });
-const dmSerif = localFont({ src: "./fonts/DMSerifDisplay-Italic.ttf", style: "italic", display: "swap" });
-const kaushan = localFont({ src: "./fonts/KaushanScript-Regular.ttf", display: "swap" });
-const marker = localFont({ src: "./fonts/PermanentMarker-Regular.ttf", display: "swap" });
-const archivo = localFont({ src: "./fonts/ArchivoBlack-Regular.ttf", display: "swap" });
-
 // Each style's sample word as the render writes it (BIG_LOOKS in runner/src/reel.ts): face, casing and colour.
-const SAMPLES: Record<ReelFont, { word: string; className: string; style: CSSProperties }> = {
+export const BIG_SAMPLES: Record<ReelFont, { word: string; className: string; style: CSSProperties }> = {
   classic: { word: "MONEY", className: "font-black tracking-tight", style: { color: "#FFFFFF" } },
   impact: { word: "MONEY", className: anton.className, style: { color: "#FFE135" } },
   editorial: { word: "Money", className: abril.className, style: { color: "#F2462E" } },
@@ -46,7 +37,7 @@ export function FontPicker({ value, onChange }: { value: ReelFont[]; onChange: (
           const order = value.indexOf(font);
           const selected = order >= 0;
           const full = mixing && !selected && value.length >= REEL_MAX_FONTS;
-          const sample = SAMPLES[font];
+          const sample = BIG_SAMPLES[font];
           return (
             <button
               key={font}

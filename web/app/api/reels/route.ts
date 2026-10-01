@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { creditsForReel, grantCredits, REEL_FONTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelFont, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
+import { creditsForReel, grantCredits, parseLookChanges, REEL_FONTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelFont, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
 import { getDb, startRender } from "@/lib/db";
 import { isDemo } from "@/lib/demo";
 import { looksLikeVideo, ownsUploadKey, uploadStore } from "@/lib/reel-uploads";
@@ -19,6 +19,8 @@ const Body = z.object({
   width: z.number().int().positive().max(10_000).nullable().default(null),
   height: z.number().int().positive().max(10_000).nullable().default(null),
   style: z.enum(REEL_STYLES as [ReelStyle, ...ReelStyle[]]).default("bold"),
+  // The customer's changes to the style: anything unknown or out of range is dropped (parseLookChanges).
+  look: z.unknown().optional().transform((look) => parseLookChanges(look)),
   // One font style, or a few the big words take turns in.
   fonts: z
     .array(z.enum(REEL_FONTS as [ReelFont, ...ReelFont[]]))
@@ -65,6 +67,7 @@ export async function POST(req: Request) {
   const { width, height } = body;
   const reel: ReelJob = {
     style: body.style,
+    look: body.look,
     fonts: body.fonts,
     emojis: body.emojis,
     zooms: body.zooms,

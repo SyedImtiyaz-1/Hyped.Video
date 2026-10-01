@@ -13,6 +13,7 @@ import { Progress } from "@/components/ui/progress";
 import { REEL_LANGUAGE_LABEL } from "./labels";
 import { measureVideo, type VideoInfo } from "./measure";
 import { FontPicker } from "./font-picker";
+import { LookEditor } from "./look-editor";
 import { StylePicker } from "./style-picker";
 import { uploadVideo, type Uploaded, type UploadJob } from "./upload";
 
@@ -180,15 +181,20 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
 
           <div>
             <Label>Caption style</Label>
-            <StylePicker value={options.style} onChange={(style) => setOptions((o) => ({ ...o, style }))} />
+            <StylePicker value={options.style} onChange={(style) => setOptions((o) => ({ ...o, style }))} changes={options.look} />
           </div>
 
           {options.style === "behind" && (
             <div>
-              <Label>Font</Label>
+              <Label>Big words font</Label>
               <FontPicker value={options.fonts} onChange={(fonts) => setOptions((o) => ({ ...o, fonts }))} />
             </div>
           )}
+
+          <div>
+            <Label>Customize</Label>
+            <LookEditor style={options.style} changes={options.look} onChange={(look) => setOptions((o) => ({ ...o, look }))} fonts={options.fonts} />
+          </div>
 
           <div>
             <Label>Extras</Label>

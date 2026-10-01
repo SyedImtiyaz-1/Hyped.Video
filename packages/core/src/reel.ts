@@ -2,15 +2,11 @@
 // back with word-by-word captions, keyword emphasis, emojis, punch-in zooms, sound effects and an optional hook title.
 // Shared by the web app (options, prices, upload limits), the render Worker and the runner (runner/src/reel.ts).
 // No Prisma here: the browser and the container import it.
+import { parseLookChanges, REEL_STYLES, type ReelLookChanges, type ReelStyle } from "./captions";
 import { customerError } from "./engines";
 
-/**
- * Caption looks: Hormozi-style bold words, clean sentences, a karaoke fill, small lowercase in the lower third, or
- * "behind": the hook and each line's key word huge and behind the speaker (their cut-out drawn back on top), with
- * clean captions in front.
- */
-export type ReelStyle = "bold" | "clean" | "karaoke" | "minimal" | "behind";
-export const REEL_STYLES: readonly ReelStyle[] = ["bold", "behind", "clean", "karaoke", "minimal"];
+// The caption styles and what customers can change about them live in captions.ts.
+export { REEL_STYLES, type ReelStyle } from "./captions";
 
 /**
  * What the captions are written in. "auto" follows the speech; "hinglish" (beta) writes Hindi and English speech in
@@ -28,9 +24,9 @@ export type ReelFont = "classic" | "impact" | "editorial" | "elegant" | "script"
 export const REEL_FONTS: readonly ReelFont[] = ["classic", "impact", "editorial", "elegant", "script", "marker", "outline", "pop"];
 export const REEL_MAX_FONTS = 4;
 
-/** What the customer picks. */
-export type ReelOptions = { style: ReelStyle; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage };
-export const REEL_DEFAULTS: ReelOptions = { style: "bold", fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto" };
+/** What the customer picks: a caption style and their changes to it ("look"), and for "behind" the big words' fonts. */
+export type ReelOptions = { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage };
+export const REEL_DEFAULTS: ReelOptions = { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto" };
 
 /** Font styles read back defensively: known ones, each once, at most REEL_MAX_FONTS, else Classic. */
 export function parseFonts(value: unknown): ReelFont[] {
@@ -98,6 +94,7 @@ export function parseReel(value: unknown): ReelJob | null {
     width: Number(v.width) || null,
     height: Number(v.height) || null,
     style: REEL_STYLES.includes(v.style as ReelStyle) ? (v.style as ReelStyle) : REEL_DEFAULTS.style,
+    look: parseLookChanges(v.look),
     fonts: parseFonts(v.fonts),
     emojis: flag(v.emojis, REEL_DEFAULTS.emojis),
     zooms: flag(v.zooms, REEL_DEFAULTS.zooms),
