@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { REEL_LANGUAGE_LABEL } from "./labels";
 import { measureVideo, type VideoInfo } from "./measure";
+import { FontPicker } from "./font-picker";
 import { StylePicker } from "./style-picker";
 import { uploadVideo, type Uploaded, type UploadJob } from "./upload";
 
@@ -181,6 +182,13 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
             <Label>Caption style</Label>
             <StylePicker value={options.style} onChange={(style) => setOptions((o) => ({ ...o, style }))} />
           </div>
+
+          {options.style === "behind" && (
+            <div>
+              <Label>Font</Label>
+              <FontPicker value={options.fonts} onChange={(fonts) => setOptions((o) => ({ ...o, fonts }))} />
+            </div>
+          )}
 
           <div>
             <Label>Extras</Label>

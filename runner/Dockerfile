@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv &&
     && /opt/segment/bin/python -c "import urllib.request; urllib.request.urlretrieve('https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite', '/app/models/selfie_multiclass_256x256.tflite')" \
     && echo "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0  /app/models/selfie_multiclass_256x256.tflite" | sha256sum -c -
 
+# "Behind you" font styles: six display fonts from Google Fonts (OFL and Apache-2.0, licences alongside), plus Inter from
+# fonts-inter above. runner/src/fonts.ts holds their measurements (scripts/font-metrics.py).
+COPY fonts /usr/share/fonts/truetype/hyped
+RUN fc-cache -f
+
 # The job runner: the Claude Agent SDK, our bundled entry points (the runner, the voice tool and the reel editor), and the
 # brag skills.
 WORKDIR /app

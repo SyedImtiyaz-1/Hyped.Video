@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { creditsForReel, grantCredits, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
+import { creditsForReel, grantCredits, REEL_FONTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelFont, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
 import { getDb, startRender } from "@/lib/db";
 import { isDemo } from "@/lib/demo";
 import { looksLikeVideo, ownsUploadKey, uploadStore } from "@/lib/reel-uploads";
@@ -19,6 +19,13 @@ const Body = z.object({
   width: z.number().int().positive().max(10_000).nullable().default(null),
   height: z.number().int().positive().max(10_000).nullable().default(null),
   style: z.enum(REEL_STYLES as [ReelStyle, ...ReelStyle[]]).default("bold"),
+  // One font style, or a few the big words take turns in.
+  fonts: z
+    .array(z.enum(REEL_FONTS as [ReelFont, ...ReelFont[]]))
+    .min(1)
+    .max(REEL_MAX_FONTS)
+    .default(["classic"])
+    .transform((fonts) => [...new Set(fonts)]),
   emojis: z.boolean().default(true),
   zooms: z.boolean().default(true),
   sfx: z.boolean().default(true),
@@ -58,6 +65,7 @@ export async function POST(req: Request) {
   const { width, height } = body;
   const reel: ReelJob = {
     style: body.style,
+    fonts: body.fonts,
     emojis: body.emojis,
     zooms: body.zooms,
     sfx: body.sfx,
