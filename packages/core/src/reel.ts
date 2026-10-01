@@ -19,9 +19,24 @@ export const REEL_STYLES: readonly ReelStyle[] = ["bold", "behind", "clean", "ka
 export type ReelLanguage = "auto" | "en" | "hinglish";
 export const REEL_LANGUAGES: readonly ReelLanguage[] = ["auto", "en", "hinglish"];
 
+/**
+ * Font styles for "behind"'s big words (its small captions stay Inter, so they always read): white Inter, yellow Anton,
+ * red Abril Fatface, white DM Serif italic, blue Kaushan Script, white Permanent Marker, hollow Inter, lime Archivo Black.
+ * A reel takes one, or mixes up to REEL_MAX_FONTS: the big words take turns, in the order they were picked.
+ */
+export type ReelFont = "classic" | "impact" | "editorial" | "elegant" | "script" | "marker" | "outline" | "pop";
+export const REEL_FONTS: readonly ReelFont[] = ["classic", "impact", "editorial", "elegant", "script", "marker", "outline", "pop"];
+export const REEL_MAX_FONTS = 4;
+
 /** What the customer picks. */
-export type ReelOptions = { style: ReelStyle; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage };
-export const REEL_DEFAULTS: ReelOptions = { style: "bold", emojis: true, zooms: true, sfx: true, hook: true, language: "auto" };
+export type ReelOptions = { style: ReelStyle; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage };
+export const REEL_DEFAULTS: ReelOptions = { style: "bold", fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto" };
+
+/** Font styles read back defensively: known ones, each once, at most REEL_MAX_FONTS, else Classic. */
+export function parseFonts(value: unknown): ReelFont[] {
+  const fonts = [...new Set((Array.isArray(value) ? value : [value]).filter((f): f is ReelFont => REEL_FONTS.includes(f as ReelFont)))].slice(0, REEL_MAX_FONTS);
+  return fonts.length ? fonts : [...REEL_DEFAULTS.fonts];
+}
 
 /** Job.reel: the options plus the uploaded file, stored in R2 at uploads/<userId>/<random>.<ext>. */
 export type ReelJob = ReelOptions & { key: string; fileName: string; bytes: number; durationSec: number; width: number | null; height: number | null };
@@ -83,6 +98,7 @@ export function parseReel(value: unknown): ReelJob | null {
     width: Number(v.width) || null,
     height: Number(v.height) || null,
     style: REEL_STYLES.includes(v.style as ReelStyle) ? (v.style as ReelStyle) : REEL_DEFAULTS.style,
+    fonts: parseFonts(v.fonts),
     emojis: flag(v.emojis, REEL_DEFAULTS.emojis),
     zooms: flag(v.zooms, REEL_DEFAULTS.zooms),
     sfx: flag(v.sfx, REEL_DEFAULTS.sfx),

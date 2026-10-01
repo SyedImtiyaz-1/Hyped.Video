@@ -17,7 +17,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import type { JobResult } from "@launchreel/core/contract";
 import { llmCostUsd, VOICE_TIMINGS_USD_PER_MINUTE, type TokenUsage } from "@launchreel/core/pricing";
-import type { ReelLanguage, ReelOptions, ReelSpec, ReelStyle } from "@launchreel/core/reel";
+import type { ReelFont, ReelLanguage, ReelOptions, ReelSpec, ReelStyle } from "@launchreel/core/reel";
+import { FACES, type Face, type FaceName } from "./fonts.ts";
 import { endsSentence, groupWords, master, round, srtCues, WEAK, type Group, type PhraseLimits, type Word } from "./media.ts";
 
 const ROOT = process.env.JOB_ROOT ?? "/workspace";
@@ -26,6 +27,8 @@ const WORK = join(ROOT, "work");
 // The sound-effects library (CC0; see audio/README.md): /app/audio in the container, runner/audio on a laptop.
 const SFX_DIR = resolve(import.meta.dirname, "../audio/sfx");
 const FPS = 30;
+// Captions go up a beat before the word is heard, as editors set them: to the eye they're then on time.
+const LEAD = 0.1;
 // OpenAI's whisper-1, the laptop fallback for word timings. In the container it's Workers AI (VOICE_TIMINGS_USD_PER_MINUTE).
 const WHISPER_USD_PER_MINUTE = 0.006;
 
@@ -169,16 +172,20 @@ function silences(wav: string): [number, number][] {
 
 /**
  * Tidy timings: in order, inside the video, never zero-length, and never inside a pause. Recognizers like to start the
- * first word at 0 s, or stretch a word over the breath after it; captions would then run ahead of the voice.
+ * first word at 0 s, or stretch a word over the breath after it; captions would then run ahead of the voice. They also
+ * start the first word after a pause late, often by 0.1-0.3 s: a word that starts just after a pause ends goes back to
+ * where the voice comes back in.
  */
 function tidy(words: Word[], duration: number, pauses: [number, number][]): Word[] {
   const out: Word[] = [];
   for (const w of words) {
     if (!w.text) continue;
     let [start, end] = [w.start, w.end];
+    const previousEnd = out[out.length - 1]?.end ?? 0;
     for (const [a, b] of pauses) {
       if (start >= a && start < b && end > b) start = b;
       if (end > a && end <= b && start < a) end = a;
+      if (start > b && start - b <= 0.4 && previousEnd <= b + 0.05) start = b;
     }
     start = Math.max(0, Math.min(duration - 0.05, Math.max(start, out[out.length - 1]?.end ?? 0)));
     out.push({ text: w.text, start: round(start), end: round(Math.min(duration, Math.max(start + 0.08, end))) });
@@ -277,7 +284,9 @@ async function llmPlan(groups: Group[], duration: number, options: ReelOptions, 
       ? '- hook: a title shown big at the top for the first 2.5 seconds: the reel\'s promise in 2-6 words, taken from what the creator actually says (like "3 tricks that doubled my sales"). No emojis, no quotes. "" if nothing fits.'
       : '- hook: always "" (the creator turned the title off).',
     "- lines: only the lines that get something, each with:",
-    `  - keyword: one word copied exactly from that line to highlight: a number, the key noun or a strong verb. About every second line (around ${Math.round(groups.length / 2)} in all); "" for none.`,
+    options.style === "behind"
+      ? '  - keyword: one word copied exactly from that line, shown huge behind the speaker: the word that carries the line (a number, the key noun or a strong verb), never a filler word like "the", "so" or "really". Every line gets one.'
+      : `  - keyword: one word copied exactly from that line to highlight: a number, the key noun or a strong verb. About every second line (around ${Math.round(groups.length / 2)} in all); "" for none.`,
     options.emojis ? `  - emoji: one emoji that matches what the line means, on about ${emojis} of the lines, spread through the video; "" for none.` : '  - emoji: always "" (emojis are off).',
     options.zooms
       ? `  - zoom: true for a punch-in on the line's key moment, on about ${zooms} lines: the strongest statements, spread through the video, never two within 3 seconds and none in the first 1.5 seconds.`
@@ -405,8 +414,8 @@ const LOOKS: Record<ReelStyle, Look> = {
   clean: { limits: { maxWords: 6, maxChars: 30, maxSeconds: 2.6, pause: 0.5, hold: 0.6 }, font: "Inter Semi Bold", size: 0.047, casing: "as-said", anchor: "top" },
   karaoke: { limits: { maxWords: 6, maxChars: 28, maxSeconds: 3, pause: 0.6, hold: 0.6 }, font: "Inter Extra Bold", size: 0.06, casing: "as-said", anchor: "top" },
   minimal: { limits: { maxWords: 5, maxChars: 26, maxSeconds: 2.4, pause: 0.5, hold: 0.6 }, font: "Inter Medium", size: 0.043, casing: "lower", anchor: "bottom" },
-  // Spoken captions as in Clean; the big words behind the speaker are drawn separately (behindEvents in buildAss).
-  behind: { limits: { maxWords: 6, maxChars: 30, maxSeconds: 2.6, pause: 0.5, hold: 0.6 }, font: "Inter Semi Bold", size: 0.047, casing: "as-said", anchor: "top" },
+  // Short lines: each one's big word goes behind the speaker and the rest is a small caption in front (buildBehind).
+  behind: { limits: { maxWords: 4, maxChars: 24, maxSeconds: 2.2, pause: 0.45, hold: 0.5 }, font: "Inter Extra Bold", size: 0.05, casing: "as-said", anchor: "top" },
 };
 
 /** Where things go, as shares of the frame. 9:16 keeps clear of the platform's buttons on the right and the bottom 30%. */
@@ -453,15 +462,51 @@ function lineBreak(words: string[], font: Font, size: number, max: number): { li
 type Frame = { width: number; height: number };
 type EmojiShot = { emoji: string; start: number; end: number; x: number; y: number; size: number };
 
+/** "#RRGGBB" darkened by `amount` (0-1), as "#RRGGBB". */
+const darker = (hex: string, amount: number) =>
+  `#${[1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - amount)).toString(16).padStart(2, "0")).join("")}`;
+
+const markStyle = (markSize: number) =>
+  `Style: Mark,Inter Semi Bold,${markSize},${assColor("#FFFFFF", 0x20)},${assColor("#FFFFFF")},${assColor("#000000", 0x70)},${assColor("#000000", 0x70)},0,0,0,0,100,100,0,0,3,${Math.round(markSize * 0.35)},0,9,0,0,0,1`;
+
+/** The free plan's mark, top right inside the safe box. */
+function markEvent(spec: ReelSpec, frame: Frame, markSize: number, duration: number): string | null {
+  if (!spec.watermark) return null;
+  const layout = layoutFor(frame.width, frame.height);
+  const pad = Math.round(markSize * 0.35);
+  return `Dialogue: 3,${assTime(0)},${assTime(duration)},Mark,,0,0,0,,{\\an9\\pos(${Math.round(frame.width * (1 - layout.markRight) - pad)},${Math.round(layout.markTop * frame.height + pad)})}${assText(spec.watermarkText)}`;
+}
+
+/** An ASS file for libass: the frame, the styles and the events. */
+function assDoc(frame: Frame, styles: string[], events: string[]): string {
+  return [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    `PlayResX: ${frame.width}`,
+    `PlayResY: ${frame.height}`,
+    "WrapStyle: 2", // lines break only where lineBreak() put them
+    "ScaledBorderAndShadow: yes",
+    "YCbCr Matrix: TV.709",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    ...styles,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ...events,
+    "",
+  ].join("\n");
+}
+
+const dialogueLine = (start: number, end: number, name: string, text: string, layer = 0) => (end - start >= 0.01 ? `Dialogue: ${layer},${assTime(start)},${assTime(end)},${name},,0,0,0,,${text}` : null);
+
 /**
  * The captions, hook title and watermark as one ASS file for libass, and where each emoji goes. Every word change is its
  * own event, so the spoken word can take the accent colour and a small pop without moving the rest of the line.
  */
-function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: ReelStyle, spec: ReelSpec, duration: number): { ass: string; behind: string | null; emojis: EmojiShot[] } {
+function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: Exclude<ReelStyle, "behind">, spec: ReelSpec, duration: number): { ass: string; emojis: EmojiShot[] } {
   const { width: W, height: H } = frame;
-  // "Behind you" draws its spoken captions like Clean; its hook and key words go in a second file, drawn under the
-  // speaker's cut-out (render()).
-  const face: Exclude<ReelStyle, "behind"> = style === "behind" ? "clean" : style;
   const base = Math.sqrt(W * H);
   const layout = layoutFor(W, H);
   const size = Math.round(look.size * base);
@@ -471,36 +516,25 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
   const bottom = Math.round(layout.captionBottom * H);
   // Bold and karaoke get a hard black outline; clean and minimal a soft dark halo (blurred), so white text still reads on
   // white screen recordings.
-  const outline = { bold: 0.1, clean: 0.09, karaoke: 0.075, minimal: 0.08 }[face] * size;
-  const shadow = { bold: 0.05, clean: 0.05, karaoke: 0.04, minimal: 0.04 }[face] * size;
-  const halo = face === "clean" ? 0x50 : face === "minimal" ? 0x60 : 0;
+  const outline = { bold: 0.1, clean: 0.09, karaoke: 0.075, minimal: 0.08 }[style] * size;
+  const shadow = { bold: 0.05, clean: 0.05, karaoke: 0.04, minimal: 0.04 }[style] * size;
+  const halo = style === "clean" ? 0x50 : style === "minimal" ? 0x60 : 0;
   const hookSize = Math.round(0.056 * base);
   const markSize = Math.round(0.021 * base);
-  const bigSize = Math.round(0.15 * base);
-  // Where faces usually are: the big words sit there so the head covers part of them.
-  const bigY = Math.round((H / W >= 1.15 ? 0.27 : 0.32) * H);
   const styles = [
     // Caption: white text; karaoke fills from white (secondary) to yellow (primary).
-    `Style: Caption,${look.font},${size},${face === "karaoke" ? assColor(YELLOW) : assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000", halo)},${assColor("#000000", face === "bold" ? 0 : 0x70)},0,0,0,0,100,100,0,0,1,${outline.toFixed(1)},${shadow.toFixed(1)},${look.anchor === "top" ? 8 : 2},0,0,0,1`,
+    `Style: Caption,${look.font},${size},${style === "karaoke" ? assColor(YELLOW) : assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000", halo)},${assColor("#000000", style === "bold" ? 0 : 0x70)},0,0,0,0,100,100,0,0,1,${outline.toFixed(1)},${shadow.toFixed(1)},${look.anchor === "top" ? 8 : 2},0,0,0,1`,
     `Style: Hook,Inter Black,${hookSize},${assColor("#0A0A0A")},${assColor("#0A0A0A")},${assColor(YELLOW)},${assColor("#000000", 0x80)},0,0,0,0,100,100,0,0,3,${Math.round(hookSize * 0.22)},0,8,0,0,0,1`,
-    `Style: Mark,Inter Semi Bold,${markSize},${assColor("#FFFFFF", 0x20)},${assColor("#FFFFFF")},${assColor("#000000", 0x70)},${assColor("#000000", 0x70)},0,0,0,0,100,100,0,0,3,${Math.round(markSize * 0.35)},0,9,0,0,0,1`,
-    // Behind the speaker: huge white words with a soft shadow, centred at head height.
-    `Style: Big,Inter Black,${bigSize},${assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000", 0x60)},${assColor("#000000", 0x90)},0,0,0,0,100,100,-2,0,1,0,${(bigSize * 0.025).toFixed(1)},5,0,0,0,1`,
+    markStyle(markSize),
   ];
   const events: string[] = [];
-  const behindEvents: string[] = [];
-  const dialogue = (start: number, end: number, name: string, text: string, layer = 0, into = events) => {
-    if (end - start >= 0.01) into.push(`Dialogue: ${layer},${assTime(start)},${assTime(end)},${name},,0,0,0,,${text}`);
-  };
-  // One big word or a short title behind the speaker: shrunk to fit the width, popping in.
-  const big = (start: number, end: number, words: string[]) => {
-    const { lines, scale } = lineBreak(words, "Inter Black", bigSize, W * 0.9);
-    const fs = scale < 1 ? `\\fs${Math.floor(bigSize * scale)}` : "";
-    dialogue(start, end, "Big", `{\\an5\\pos(${x},${bigY})${fs}\\blur2\\fscx86\\fscy86\\t(0,180,\\fscx100\\fscy100)\\fad(90,140)}${lines.map((l) => l.join(" ")).join("\\N")}`, 0, behindEvents);
+  const dialogue = (start: number, end: number, name: string, text: string, layer = 0) => {
+    const line = dialogueLine(start, end, name, text, layer);
+    if (line) events.push(line);
   };
   const soft = halo ? `\\blur${Math.max(3, Math.round(size * 0.14))}` : "";
   const emojis: EmojiShot[] = [];
-  const emojiSize = even((face === "minimal" ? 0.08 : 0.115) * base);
+  const emojiSize = even((style === "minimal" ? 0.08 : 0.115) * base);
 
   groups.forEach((g, gi) => {
     const line = plan.lines[gi];
@@ -512,7 +546,7 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
     const join = (parts: string[]) => parts.map((p, i) => (i > 0 ? (breaks.has(i) ? "\\N" : " ") : "") + p).join("");
     const isKey = (i: number) => line.keyword === i;
 
-    if (face === "karaoke") {
+    if (style === "karaoke") {
       // One event per line: each word fills as it's said (\kf), keywords fill green.
       const parts = g.words.map((w, i) => {
         const next = i + 1 < g.words.length ? g.words[i + 1].start : g.end;
@@ -528,17 +562,17 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
         const start = k === 0 ? g.start : w.start;
         const end = k + 1 < g.words.length ? g.words[k + 1].start : g.end;
         const parts = words.map((word, i) => {
-          if (face === "minimal") {
+          if (style === "minimal") {
             const alpha = i === k ? "&H00&" : "&H48&";
             return isKey(i) ? `{\\1a${alpha}\\fnInter Extra Bold}${word}{\\fn${look.font}}` : `{\\1a${alpha}}${word}`;
           }
-          const color = face === "bold" && isKey(i) ? GREEN : YELLOW;
-          const heavy = face === "clean" && isKey(i) ? `\\fnInter Extra Bold` : "";
+          const color = style === "bold" && isKey(i) ? GREEN : YELLOW;
+          const heavy = style === "clean" && isKey(i) ? `\\fnInter Extra Bold` : "";
           if (i === k) {
-            const pop = face === "bold" ? (isKey(i) ? 124 : 114) : 108;
+            const pop = style === "bold" ? (isKey(i) ? 124 : 114) : 108;
             return `{\\1c${tagColor(color)}${heavy}\\fscx${pop}\\fscy${pop}\\t(0,110,\\fscx100\\fscy100)}${word}{\\1c&HFFFFFF&\\fscx100\\fscy100${heavy ? `\\fn${look.font}` : ""}}`;
           }
-          if (face === "bold" && isKey(i)) return `{\\1c${tagColor(GREEN)}}${word}{\\1c&HFFFFFF&}`;
+          if (style === "bold" && isKey(i)) return `{\\1c${tagColor(GREEN)}}${word}{\\1c&HFFFFFF&}`;
           return heavy ? `{${heavy}}${word}{\\fn${look.font}}` : word;
         });
         dialogue(start, end, "Caption", `{${pos}${fs}${soft}${k === 0 ? "\\fad(60,0)" : ""}}${join(parts)}`);
@@ -548,8 +582,7 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
     // The emoji pops in above the caption when its keyword (or the line) starts, and stays at least 1.1 s. At least 3 s
     // apart and one per 7 s at most, like the punch-ins.
     const at = line.keyword !== null ? g.words[line.keyword].start : g.start;
-    // "Behind you" has no emojis: its big words already carry the emphasis, and an emoji there lands on the face.
-    if (style !== "behind" && line.emoji && at - (emojis[emojis.length - 1]?.start ?? -Infinity) >= 3 && emojis.length < Math.ceil(duration / 7)) {
+    if (line.emoji && at - (emojis[emojis.length - 1]?.start ?? -Infinity) >= 3 && emojis.length < Math.ceil(duration / 7)) {
       const lineHeight = size * scale * 1.05;
       const y = look.anchor === "top" ? top - 0.012 * H - emojiSize : bottom - lineHeight * lines.length - 0.01 * H - emojiSize;
       const end = Math.min(duration, Math.max(at + 1.1, g.end));
@@ -557,19 +590,7 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
     }
   });
 
-  if (style === "behind") {
-    // The hook, then each line's key word, one at a time behind the speaker: from when it's said until the line ends
-    // (at least 1.2 s), never overlapping the next one.
-    const hookEnd = plan.hook ? Math.min(2.6, duration - 0.1) : 0;
-    if (plan.hook) big(0.1, hookEnd, plan.hook.toLocaleUpperCase("en").split(" ").map(assText));
-    const shots = groups
-      .map((g, i) => (plan.lines[i].keyword === null ? null : { at: g.words[plan.lines[i].keyword!].start, end: g.end, word: g.words[plan.lines[i].keyword!].text }))
-      .filter((s): s is { at: number; end: number; word: string } => s !== null && s.at >= hookEnd);
-    shots.forEach((s, i) => {
-      const next = shots[i + 1]?.at ?? duration;
-      big(s.at, Math.min(next - 0.05, Math.max(s.end, s.at + 1.2), duration), [shown(s.word, LOOKS.bold)]);
-    });
-  } else if (plan.hook) {
+  if (plan.hook) {
     const words = plan.hook.toLocaleUpperCase("en").split(" ").map(assText);
     const { lines, scale } = lineBreak(words, "Inter Black", hookSize, W * 0.8);
     const text = lines.map((l) => l.join(" ")).join("\\N");
@@ -584,31 +605,370 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, style: 
       2,
     );
   }
-  if (spec.watermark) {
-    const pad = Math.round(markSize * 0.35);
-    dialogue(0, duration, "Mark", `{\\an9\\pos(${Math.round(W * (1 - layout.markRight) - pad)},${Math.round(layout.markTop * H + pad)})}${assText(spec.watermarkText)}`, 3);
+  const mark = markEvent(spec, frame, markSize, duration);
+  if (mark) events.push(mark);
+  return { ass: assDoc(frame, styles, events), emojis };
+}
+
+/* ---------- "Behind you" ---------- */
+
+/** A font style for the big words: the face, its casing and colour, letter spacing (em), and whether it's an outline. */
+type BigLook = { face: FaceName; casing: "upper" | "lower" | "title"; color: string; tracking: number; hollow?: boolean };
+const BIG_LOOKS: Record<ReelFont, BigLook> = {
+  classic: { face: "Inter Black", casing: "upper", color: "#FFFFFF", tracking: -0.02 },
+  impact: { face: "Anton", casing: "upper", color: "#FFE135", tracking: 0.01 },
+  editorial: { face: "Abril Fatface", casing: "title", color: "#F2462E", tracking: 0 },
+  elegant: { face: "DM Serif Display", casing: "lower", color: "#FFFFFF", tracking: -0.01 },
+  script: { face: "Kaushan Script", casing: "title", color: "#4C9BFF", tracking: 0 },
+  marker: { face: "Permanent Marker", casing: "upper", color: "#FFFFFF", tracking: 0 },
+  outline: { face: "Inter Black", casing: "upper", color: "#FFFFFF", tracking: 0, hollow: true },
+  pop: { face: "Archivo Black", casing: "upper", color: "#C6FF3D", tracking: -0.02 },
+};
+
+/** A big word as its font style writes it: trailing commas and full stops dropped, then cased. */
+function bigText(word: string, look: BigLook): string {
+  const text = assText(word).replace(/[.,;:]+$/, "");
+  if (look.casing === "upper") return text.toLocaleUpperCase("en");
+  if (look.casing === "lower") return text.toLocaleLowerCase("en");
+  return text.charAt(0).toLocaleUpperCase("en") + text.slice(1);
+}
+
+/** A character's measurements in a face (fonts.ts): its own, else its letter without the accent, else an average letter's. */
+const glyphOf = (face: Face, ch: string) => face.glyphs[ch] ?? face.glyphs[ch.normalize("NFD")[0]] ?? face.glyphs[/\p{Lu}/u.test(ch) ? "O" : "o"];
+
+/**
+ * A line of big text at ASS size `size`, around its \an5 anchor, in pixels with y down: its ink box and where each
+ * letter's advance runs. libass sizes a font so its Windows ascent and descent add up to the size, and centres that box
+ * on the anchor; kerning is left out, as it only ever narrows a word.
+ */
+function measureLine(face: Face, text: string, size: number, tracking: number) {
+  const em = size / (face.asc + face.desc);
+  const chars = [...text].filter((c) => !/\p{M}/u.test(c));
+  const glyphs = chars.map((c) => glyphOf(face, c));
+  const advances = glyphs.map((g) => (g[0] + tracking) * em);
+  const total = advances.reduce((a, b) => a + b, 0);
+  const letters: { x0: number; x1: number; blank: boolean }[] = [];
+  let x = -total / 2;
+  chars.forEach((c, i) => {
+    letters.push({ x0: x, x1: x + advances[i], blank: c === " " });
+    x += advances[i];
+  });
+  const baseline = ((face.asc - face.desc) / 2) * em;
+  const inked = glyphs.filter((_, i) => chars[i] !== " ");
+  return {
+    left: -total / 2 + glyphs[0][1] * em,
+    right: total / 2 - advances[advances.length - 1] + glyphs[glyphs.length - 1][2] * em,
+    top: baseline - Math.max(...inked.map((g) => g[4])) * em,
+    bottom: baseline - Math.min(...inked.map((g) => g[3])) * em,
+    letters,
+  };
+}
+
+/** An outline style's stroke at ASS size `size`, in pixels. */
+const strokeOf = (face: Face, size: number) => (0.045 * glyphOf(face, "H")[4] * size) / (face.asc + face.desc);
+
+/**
+ * Lines of big text stacked at ASS size `size`, an even gap between their ink: the block's ink box around its centre,
+ * and for each line the anchor (from the block's centre), its ink box and its letters.
+ */
+function measureBlock(look: BigLook, lines: string[], size: number) {
+  const face: Face = FACES[look.face];
+  const stroke = look.hollow ? strokeOf(face, size) : 0;
+  const gap = (0.24 * glyphOf(face, "H")[4] * size) / (face.asc + face.desc);
+  const measured = lines.map((l) => measureLine(face, l, size, look.tracking));
+  const height = measured.reduce((a, m) => a + m.bottom - m.top, 0) + gap * (lines.length - 1) + 2 * stroke;
+  let cursor = -height / 2 + stroke;
+  const placed = measured.map((m) => {
+    const dy = cursor - m.top;
+    cursor += m.bottom - m.top + gap;
+    return { ...m, dy };
+  });
+  return { left: Math.min(...measured.map((m) => m.left)) - stroke, right: Math.max(...measured.map((m) => m.right)) + stroke, height, lines: placed };
+}
+
+/**
+ * Where the speaker is, from tools/segment.py: per frame, LAYERS grids of cells (0-255): the share of each cell that's the
+ * person, the share that's their face, and how bright the cell is.
+ */
+type Seg = { frames: number; grid: number; cells: Uint8Array; cuts: number[] };
+const LAYERS = 3;
+
+// How much of a big word the speaker may hide (Moonshot's numbers): aim for 18%, 15-25% is right, up to 50% will do;
+// past that the word goes in front of the speaker, kept off the face. Letters count too: a letter more than about a
+// third hidden starts to go, and `spare` is how many letters' worth may go (by default by the word's length: a long
+// word reads with one missing, "TH EE" doesn't). The hook is the reel's promise and must read whole: it goes behind the
+// speaker only where they don't touch it (smaller if need be), else in front, off the face.
+type Aim = { ideal: number; low: number; high: number; max: number; spare: number | null; strict: boolean };
+const WORD_AIM: Aim = { ideal: 0.18, low: 0.15, high: 0.25, max: 0.5, spare: null, strict: false };
+const HOOK_AIM: Aim = { ideal: 0, low: 0, high: 0.01, max: 0.03, spare: 0.1, strict: true };
+
+/** Where a block of big text goes: its centre, its ASS size, how much of it the speaker hides there, and how bright the background behind it is (0-1). */
+type Spot = { y: number; size: number; width: number; front: boolean; hidden: number; peak: number; face: number; light: number };
+
+const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+
+/** The frames from `from` to `to` (24 at most, spread evenly), and the person, the face and the brightness in them on average. */
+function layers(seg: Seg | null, from: number, to: number) {
+  const G = seg?.grid ?? 1;
+  const frames: number[] = [];
+  if (seg) {
+    const f0 = Math.min(seg.frames - 1, Math.max(0, Math.floor(from * FPS)));
+    const f1 = Math.min(seg.frames, Math.max(f0 + 1, Math.ceil(to * FPS)));
+    for (let f = f0; f < f1; f += Math.max(1, Math.ceil((f1 - f0) / 24))) frames.push(f);
+  }
+  const [person, face, light] = [new Float64Array(G * G), new Float64Array(G * G), new Float64Array(G * G)];
+  for (const f of frames) {
+    for (let i = 0; i < G * G; i++) {
+      person[i] += seg!.cells[f * LAYERS * G * G + i] / 255 / frames.length;
+      face[i] += seg!.cells[(f * LAYERS + 1) * G * G + i] / 255 / frames.length;
+      light[i] += seg!.cells[(f * LAYERS + 2) * G * G + i] / 255 / frames.length;
+    }
+  }
+  // The model sees a trace of face almost everywhere; only cells that are mostly face count.
+  for (let i = 0; i < G * G; i++) if (face[i] < 0.2) face[i] = 0;
+  return { G, frames, person, face, light, faceTotal: face.reduce((a, b) => a + b, 0) };
+}
+
+/** The share of the face (averaged in `face`) that a box covers; 0 when there's no face to speak of. */
+function onFace(face: Float64Array, faceTotal: number, G: number, frame: Frame, x0: number, y0: number, w: number, h: number) {
+  const [cw, ch] = [frame.width / G, frame.height / G];
+  if (faceTotal * cw * ch < 0.002 * frame.width * frame.height) return 0;
+  let covered = 0;
+  for (let r = Math.max(0, Math.floor(y0 / ch)); r < Math.min(G, Math.ceil((y0 + h) / ch)); r++) {
+    const oy = overlap(y0, y0 + h, r * ch, (r + 1) * ch);
+    for (let k = Math.max(0, Math.floor(x0 / cw)); k < Math.min(G, Math.ceil((x0 + w) / cw)); k++) covered += face[r * G + k] * oy * overlap(x0, x0 + w, k * cw, (k + 1) * cw);
+  }
+  return covered / (faceTotal * cw * ch);
+}
+
+/**
+ * Tries sizes (75-95% of the width, a little smaller for a word that has to go in front) and heights in the band, and
+ * measures how much of the block the speaker hides over every frame it's on screen. Takes the one closest to the aim,
+ * preferring big, near the top of the band and near the previous word of the same shot. If every spot would hide more
+ * than the aim allows, the block goes in front of the speaker where it covers the least of the face.
+ */
+function place(look: BigLook, lines: string[], from: number, to: number, seg: Seg | null, frame: Frame, band: [number, number], aim: Aim, maxHeight: number, previous: number | null): Spot {
+  const { width: W, height: H } = frame;
+  const { G, frames, person, face, light, faceTotal } = layers(seg, from, to);
+  const [cw, ch] = [W / G, H / G];
+  const letterCount = lines.join("").replace(/\s/g, "").length;
+  const spare = aim.spare ?? (letterCount >= 8 ? 1 : letterCount >= 5 ? 0.6 : 0.35);
+  /** The share of a box the speaker covers, on average. */
+  const hiddenIn = (x0: number, y0: number, w: number, h: number) => {
+    let covered = 0;
+    for (let r = Math.max(0, Math.floor(y0 / ch)); r < Math.min(G, Math.ceil((y0 + h) / ch)); r++) {
+      const oy = overlap(y0, y0 + h, r * ch, (r + 1) * ch);
+      for (let k = Math.max(0, Math.floor(x0 / cw)); k < Math.min(G, Math.ceil((x0 + w) / cw)); k++) covered += person[r * G + k] * oy * overlap(x0, x0 + w, k * cw, (k + 1) * cw);
+    }
+    return covered / (w * h);
+  };
+
+  let best: (Spot & { cost: number }) | null = null;
+  // Sizes: the ink 60-95% of the frame's width, no taller than maxHeight, and inside the frame (sizes scale linearly).
+  const unit = measureBlock(look, lines, 100);
+  const fits = (p: number) => 100 * Math.min((p * W) / (unit.right - unit.left), maxHeight / unit.height, (0.49 * W) / Math.max(-unit.left, unit.right));
+  const sizes = new Set([0.95, 0.9, 0.85, 0.8, 0.75, 0.68, 0.6].map((p) => Math.floor(fits(p))));
+  for (const size of sizes) {
+    const block = measureBlock(look, lines, size);
+    const [bw, bh] = [block.right - block.left, block.height];
+    const home = band[0] * H + bh / 2 + 0.025 * H;
+    const [lo, hi] = [band[0] * H + bh / 2, Math.max(band[0] * H + bh / 2, band[1] * H - bh / 2)];
+    for (let y = lo; y <= hi + 0.5; y += H / 100) {
+      const [x0, y0] = [W / 2 + block.left, y - bh / 2];
+      const rows: [number, number][] = [];
+      const cols: [number, number][] = [];
+      for (let r = Math.max(0, Math.floor(y0 / ch)); r < Math.min(G, Math.ceil((y0 + bh) / ch)); r++) rows.push([r, overlap(y0, y0 + bh, r * ch, (r + 1) * ch)]);
+      for (let k = Math.max(0, Math.floor(x0 / cw)); k < Math.min(G, Math.ceil((x0 + bw) / cw)); k++) cols.push([k, overlap(x0, x0 + bw, k * cw, (k + 1) * cw)]);
+      const shares = frames.map((f) => {
+        let covered = 0;
+        for (const [r, oy] of rows) for (const [k, ox] of cols) covered += seg!.cells[(f * LAYERS * G + r) * G + k] * ox * oy;
+        return covered / 255 / (bw * bh);
+      });
+      const hidden = shares.length ? shares.reduce((a, b) => a + b, 0) / shares.length : 0;
+      const peak = shares.length ? [...shares].sort((a, b) => a - b)[Math.floor(0.9 * (shares.length - 1))] : 0;
+      const faceShare = onFace(face, faceTotal, G, frame, x0, y0, bw, bh);
+      // How bright the visible part of the background is, behind the word.
+      let [lit, seen] = [0, 0];
+      for (const [r, oy] of rows) for (const [k, ox] of cols) [lit, seen] = [lit + light[r * G + k] * (1 - person[r * G + k]) * ox * oy, seen + (1 - person[r * G + k]) * ox * oy];
+      // Letters lost: none for a letter up to 35% hidden, all of it from 80%.
+      let lost = 0;
+      for (const line of block.lines) {
+        const [ly, lh] = [y + line.dy + line.top, line.bottom - line.top];
+        for (const l of line.letters) if (!l.blank) lost += Math.min(1, Math.max(0, (hiddenIn(W / 2 + l.x0, ly, l.x1 - l.x0, lh) - 0.35) / 0.45));
+      }
+      // A strict aim (the hook) can't lose any letter behind the speaker: it goes in front instead.
+      const behind = hidden <= aim.max && peak <= aim.max + 0.15 && (!aim.strict || lost <= (aim.spare ?? 0));
+      const off = Math.max(0, aim.low - hidden, hidden - aim.high);
+      const taste = 0.6 * Math.max(0, 0.95 - bw / W) + (0.25 * Math.abs(y - home)) / H + (previous === null ? 0 : (0.6 * Math.abs(y - previous)) / H);
+      const cost = behind ? 8 * off + Math.abs(hidden - aim.ideal) + 3 * Math.max(0, lost - spare) + taste : 100 + 20 * faceShare + taste;
+      if (!best || cost < best.cost) best = { y: Math.round(y), size, width: bw, front: !behind, hidden, peak, face: faceShare, light: seen > 0 ? lit / seen : 0.5, cost };
+    }
+  }
+  const { cost: _, ...spot } = best!;
+  return spot;
+}
+
+/** Splits words into `n` lines as even in width as can be (the hook behind the speaker). */
+function balance(words: string[], n: number, look: BigLook): string[] {
+  const width = (ws: string[]) => {
+    const m = measureLine(FACES[look.face], ws.join(" "), 100, look.tracking);
+    return m.right - m.left;
+  };
+  let best = [words];
+  let widest = n > 1 ? Infinity : width(words);
+  for (let i = 1; i < words.length && n > 1; i++) {
+    for (let j = n > 2 ? i + 1 : words.length; j <= words.length; j++) {
+      const lines = [words.slice(0, i), words.slice(i, j), words.slice(j)].filter((l) => l.length);
+      if (lines.length !== Math.min(n, words.length)) continue;
+      const w = Math.max(...lines.map(width));
+      if (w < widest) [best, widest] = [lines, w];
+    }
+  }
+  return best.map((l) => l.join(" "));
+}
+
+/** A line's strongest word, when the plan gave it none: a number, a power word, else the longest word that isn't filler. */
+function strongest(g: Group): number | null {
+  let [best, top] = [null as number | null, 0];
+  g.words.forEach((w, k) => {
+    const n = bare(w.text);
+    const digits = /\d/.test(n);
+    if (!digits && (n.length < 3 || STOP.has(n))) return;
+    const score = (digits ? 20 : POWER.has(n) ? 10 : 0) + Math.min(n.length, 10);
+    if (score > top) [best, top] = [k, score];
+  });
+  return best;
+}
+
+/** One big word, or the hook, as placed: what it says, when, where, and how much the speaker hides (for edit.json). */
+type Placement = { text: string; start: number; end: number; front: boolean; hidden: number; peak: number; face: number; light: number; y: number; width: number };
+
+/**
+ * "Behind you": each caption line's key word huge behind the speaker, placed so they hide about 18% of it, and the rest
+ * of the line small in front, building word by word. Returns the ASS drawn under the speaker's cut-out, the ASS drawn
+ * over it, and every placement.
+ */
+function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], frame: Frame, spec: ReelSpec, duration: number, seg: Seg | null): { behind: string; front: string; placements: Placement[] } {
+  const { width: W, height: H } = frame;
+  const first: Face = FACES[bigs[0].face];
+  const base = Math.sqrt(W * H);
+  const layout = layoutFor(W, H);
+  const tall = H / W >= 1.6;
+  const size = Math.round(look.size * base);
+  const markSize = Math.round(0.021 * base);
+  // The big words stay between the platform's top bar (9:16: the top 14%), or the free plan's mark, and the caption.
+  const below = spec.watermark ? layout.markTop + (markSize * 2.4) / H : 0;
+  const band: [number, number] = tall ? [Math.max(0.14, below), 0.47] : [Math.max(layout.hookTop, below), layout.captionTop - 0.04];
+  const x = Math.round(W / 2);
+  const styles = [
+    // In front: the rest of the line, white with a soft dark halo, as in Clean.
+    `Style: Sub,${look.font},${size},${assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000", 0x50)},${assColor("#000000", 0x70)},0,0,0,0,100,100,0,0,1,${(0.09 * size).toFixed(1)},${(0.05 * size).toFixed(1)},8,0,0,0,1`,
+    // The big words: face, size, colour, blur and the soft shadow (a second, blurred black copy) are set on each event,
+    // as a reel can mix font styles.
+    `Style: Big,${first.family},100,${assColor("#FFFFFF")},${assColor("#FFFFFF")},${assColor("#000000")},${assColor("#000000")},0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`,
+    markStyle(markSize),
+  ];
+  const behindEvents: string[] = [];
+  const frontEvents: string[] = [];
+  const placements: Placement[] = [];
+  const cuts = (seg?.cuts ?? []).map((f) => f / FPS);
+
+  // Big text fades up into place. The more of it the speaker hides, the further back it sits: blurred (up to 6 px at
+  // 1080p), darker (up to 40%) and smaller (up to 6%). Its soft shadow gets darker and wider on a bright background,
+  // so the words still read on a white wall. An outline style draws only the stroke, and its shadow is a blurred stroke.
+  const draw = (big: BigLook, lines: string[], spot: Spot, start: number, end: number) => {
+    const face: Face = FACES[big.face];
+    const depth = spot.front ? 0 : Math.min(1, spot.hidden / WORD_AIM.max);
+    const block = measureBlock(big, lines, spot.size);
+    const scale = Math.round(100 * (1 - 0.06 * depth));
+    const blur = (6 * depth * base) / 1440;
+    const [rise, drop] = [Math.round(0.012 * H), Math.round(0.005 * H)];
+    const [shade, spread] = spot.light > 0.72 ? ["&H20&", 0.02] : spot.light > 0.55 ? ["&H48&", 0.017] : ["&H70&", 0.014];
+    const color = tagColor(darker(big.color, 0.4 * depth));
+    const stroke = big.hollow ? strokeOf(face, spot.size).toFixed(1) : "0";
+    const spacing = ((big.tracking * spot.size) / (face.asc + face.desc)).toFixed(1);
+    const common = `\\an5\\fn${face.family}\\i${face.italic ? 1 : 0}\\fs${spot.size}\\fsp${spacing}\\fscx${scale}\\fscy${scale}\\fad(100,120)\\bord${stroke}`;
+    const [fill, shadowFill] = big.hollow ? [`\\1a&HFF&\\3c${color}`, `\\1a&HFF&\\3c&H000000&\\3a${shade}`] : [`\\1c${color}`, `\\1c&H000000&\\1a${shade}`];
+    block.lines.forEach((line, i) => {
+      const y = Math.round(spot.y + line.dy);
+      const into = spot.front ? frontEvents : behindEvents;
+      const shadow = dialogueLine(start, end, "Big", `{${common}\\move(${x},${y + drop + rise},${x},${y + drop},0,200)${shadowFill}\\blur${Math.round(spread * base)}}${lines[i]}`, 0);
+      const text = dialogueLine(start, end, "Big", `{${common}\\move(${x},${y + rise},${x},${y},0,200)${fill}${blur >= 0.3 ? `\\blur${blur.toFixed(1)}` : ""}}${lines[i]}`, 1);
+      for (const event of [shadow, text]) if (event) into.push(event);
+    });
+    placements.push({ text: lines.join(" "), start: round(start), end: round(end), front: spot.front, hidden: round(spot.hidden), peak: round(spot.peak), face: round(spot.face), light: round(spot.light), y: round(spot.y / H), width: round(spot.width / W) });
+  };
+
+  // The hook, for the first 2.5 s, in the first font style.
+  const hookEnd = plan.hook ? Math.min(2.6, duration - 0.1) : 0;
+  if (plan.hook) {
+    const words = plan.hook.split(" ").map((w) => bigText(w, bigs[0])).filter(Boolean);
+    const lines = balance(words, words.length <= 2 ? 1 : words.length <= 5 ? 2 : 3, bigs[0]);
+    draw(bigs[0], lines, place(bigs[0], lines, 0.1, hookEnd, seg, frame, band, HOOK_AIM, (tall ? 0.075 : 0.1) * H * lines.length, null), 0.1, hookEnd);
   }
 
-  const doc = (lines: string[]) =>
-    [
-      "[Script Info]",
-      "ScriptType: v4.00+",
-      `PlayResX: ${W}`,
-      `PlayResY: ${H}`,
-      "WrapStyle: 2", // lines break only where lineBreak() put them
-      "ScaledBorderAndShadow: yes",
-      "YCbCr Matrix: TV.709",
-      "",
-      "[V4+ Styles]",
-      "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-      ...styles,
-      "",
-      "[Events]",
-      "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-      ...lines,
-      "",
-    ].join("\n");
-  return { ass: doc(events), behind: style === "behind" ? doc(behindEvents) : null, emojis };
+  // Each line's big word: from when it's said to the end of the line (0.8 s at least), never into the next one or
+  // across a cut. One said just before a cut waits for the new shot.
+  const shots: { gi: number; k: number; start: number; end: number }[] = [];
+  groups.forEach((g, gi) => {
+    const k = plan.lines[gi].keyword ?? strongest(g);
+    if (k === null || g.words[k].start < hookEnd) return;
+    let [start, end] = [Math.max(0, g.words[k].start - 0.05), Math.min(duration, Math.max(g.end, g.words[k].start + 0.8))];
+    const cut = cuts.find((c) => c > start && c < end);
+    if (cut !== undefined && cut - start < 0.4) start = cut;
+    else if (cut !== undefined) end = cut - 1 / FPS;
+    shots.push({ gi, k, start, end });
+  });
+  shots.forEach((s, i) => (s.end = Math.min(s.end, (shots[i + 1]?.start ?? Infinity) - 0.04)));
+  const kept = shots.filter((s) => s.end - s.start >= 0.4);
+  // With several font styles the words take turns, in the order they were picked (after the hook's).
+  let previous: { y: number; end: number } | null = null;
+  for (const [n, s] of kept.entries()) {
+    const big = bigs[(n + (plan.hook ? 1 : 0)) % bigs.length];
+    const text = bigText(groups[s.gi].words[s.k].text, big);
+    if (!text) continue;
+    // Near the previous word when it's the same shot and just before: the words shouldn't jump about.
+    const near = previous && s.start - previous.end < 1 && !cuts.some((c) => c > previous!.end && c <= s.start) ? previous.y : null;
+    const spot = place(big, [text], s.start, s.end, seg, frame, band, WORD_AIM, (tall ? 0.15 : 0.2) * H, near);
+    draw(big, [text], spot, s.start, s.end);
+    previous = { y: spot.y, end: s.end };
+  }
+
+  // In front: the rest of each line, building word by word (words still to come are drawn invisible, so nothing moves).
+  // It sits at the top of the safe box, or lower in it when the speaker's face is there; it stays put while it can.
+  const heroes = new Map(kept.map((s) => [s.gi, s.k]));
+  const max = W * (1 - 2 * layout.side) * 0.94;
+  const soft = `\\blur${Math.max(3, Math.round(size * 0.14))}`;
+  let lastTop: number | null = null;
+  groups.forEach((g, gi) => {
+    const rest = g.words.map((_, i) => i).filter((i) => i !== heroes.get(gi));
+    if (!rest.length) return;
+    const words = rest.map((i) => shown(g.words[i].text, look));
+    const { lines, scale } = lineBreak(words, look.font, size, max);
+    const fs = scale < 1 ? `\\fs${Math.floor(size * scale)}` : "";
+    const [bw, bh] = [Math.max(...lines.map((l) => textWidth(l.join(" "), look.font, size * scale))), lines.length * size * scale * 1.1];
+    const { G, face, faceTotal } = layers(seg, g.start, g.end);
+    const cover = (t: number) => onFace(face, faceTotal, G, frame, (W - bw) / 2, t, bw, bh);
+    let top = layout.captionTop * H;
+    if (cover(top) > 0.02 && lastTop !== null && cover(lastTop) <= 0.02) top = lastTop;
+    else if (cover(top) > 0.02) {
+      let best = Infinity;
+      for (let t = layout.captionTop * H; t + bh <= layout.captionBottom * H; t += H / 200) {
+        const cost = 20 * cover(t) + (0.4 * (t - layout.captionTop * H)) / H;
+        if (cost < best) [best, top] = [cost, t];
+      }
+    }
+    top = lastTop = Math.round(top);
+    rest.forEach((wi, n) => {
+      const end = n + 1 < rest.length ? g.words[rest[n + 1]].start : g.end;
+      const text = words.map((w, i) => `${i === 0 ? "" : lines.length > 1 && i === lines[0].length ? "\\N" : " "}${i === n + 1 ? "{\\alpha&HFF&}" : ""}${w}`).join("");
+      const event = dialogueLine(g.words[wi].start, end, "Sub", `{\\an8\\pos(${x},${top})${fs}${soft}${n === 0 ? "\\fad(60,0)" : ""}}${text}`);
+      if (event) frontEvents.push(event);
+    });
+  });
+  const mark = markEvent(spec, frame, markSize, duration);
+  if (mark) frontEvents.push(mark);
+  return { behind: assDoc(frame, styles, behindEvents), front: assDoc(frame, styles, frontEvents), placements };
 }
 
 /* ---------- emojis ---------- */
@@ -759,25 +1119,23 @@ const SEGMENT_PYTHON = process.env.SEGMENT_PYTHON ?? "/opt/segment/bin/python";
 const SEGMENT_MODEL = process.env.SEGMENT_MODEL ?? "/app/models/selfie_multiclass_256x256.tflite";
 const SEGMENT_SCRIPT = resolve(import.meta.dirname, "../tools/segment.py");
 
-/** Writes the speaker's mask for a video. False if it can't: the big words then go on top, like a title. */
-function segment(video: string, mask: string): boolean {
+/** The speaker's mask for a video, and where they are in each frame. Null if it can't: the big words then go on top, like titles. */
+function segment(video: string, mask: string, gridFile: string): Seg | null {
   try {
-    const out = execFileSync(SEGMENT_PYTHON, [SEGMENT_SCRIPT, video, mask, SEGMENT_MODEL], { stdio: ["ignore", "pipe", "pipe"], timeout: 20 * 60_000, encoding: "utf8" });
-    const stats = JSON.parse(out.trim().split("\n").pop() ?? "{}") as { frames?: number; coverage?: number; seconds?: number };
-    log(`speaker mask: ${stats.frames} frames, a person in ${Math.round((stats.coverage ?? 0) * 100)}% of them, ${stats.seconds}s`);
-    return true;
+    const out = execFileSync(SEGMENT_PYTHON, [SEGMENT_SCRIPT, video, mask, SEGMENT_MODEL, gridFile], { stdio: ["ignore", "pipe", "pipe"], timeout: 20 * 60_000, encoding: "utf8" });
+    const stats = JSON.parse(out.trim().split("\n").pop() ?? "{}") as { frames: number; coverage: number; cuts: number[]; grid: number; seconds: number };
+    const cells = new Uint8Array(readFileSync(gridFile));
+    if (cells.length !== stats.frames * LAYERS * stats.grid * stats.grid) throw new Error(`the grid has ${cells.length} bytes for ${stats.frames} frames`);
+    log(`speaker mask: ${stats.frames} frames, a person in ${Math.round(stats.coverage * 100)}% of them, ${stats.cuts.length} cuts, ${stats.seconds}s`);
+    return { frames: stats.frames, grid: stats.grid, cells, cuts: stats.cuts };
   } catch (err) {
     log(`speaker mask failed (${redact(String((err as { stderr?: string }).stderr || err)).slice(-300)}); the big words go on top`);
-    return false;
+    return null;
   }
 }
 
-/**
- * Tone-map HDR, zoom, emoji overlays, then libass draws the captions, hook and watermark on top. "Behind you" adds a
- * pass first: the zoomed picture alone, so the speaker's mask matches every frame; the big words are then drawn on the
- * picture and the speaker's cut-out laid back over them.
- */
-function render(input: string, audio: string, assFile: string, behindFile: string | null, frame: Frame, source: Probe, zooms: Zoom[], emojis: EmojiShot[], sequences: Map<string, string>, duration: number, out: string) {
+/** The picture's filters: big uploads scaled down, HDR tone-mapped, 30 fps, fitted to the frame, and the punch-ins. */
+function pictureChain(frame: Frame, source: Probe, zooms: Zoom[]): string {
   const { width: W, height: H } = frame;
   const chain: string[] = [];
   // Big uploads (4K) are brought down first, keeping some room for the punch-ins, so the rest runs on fewer pixels.
@@ -788,26 +1146,33 @@ function render(input: string, audio: string, assFile: string, behindFile: strin
   const cy = H / W >= 1.15 ? 0.4 : 0.45;
   chain.push(zooms.length ? `zoompan=z='${zoomExpression(zooms)}':x='(iw-iw/zoom)/2':y='clip(ih*${cy}-ih/zoom/2,0,ih-ih/zoom)':d=1:s=${W}x${H}:fps=${FPS}` : `scale=${W}:${H}:flags=bicubic`);
   chain.push("setsar=1,format=yuv420p");
-  let picture = input;
-  let graph = [`[0:v:0]${chain.join(",")}[v0]`];
+  return chain.join(",");
+}
+
+/** "Behind you", first pass: the picture alone, nearly lossless, so the speaker's mask and the placement match the final frames. */
+function renderBase(input: string, chain: string, duration: number, out: string) {
+  ffmpeg(["-i", input, "-filter_complex", `[0:v:0]${chain}[v]`, "-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", "-t", String(duration), out], 30 * 60_000);
+}
+
+/**
+ * The picture (through `chain`, or already prepared by renderBase), emoji overlays, then libass draws the captions, hook
+ * and watermark on top. "Behind you" draws its big words on the picture first and lays the speaker's cut-out back over them.
+ */
+function render(picture: string, chain: string | null, audio: string, assFile: string, behind: { file: string; mask: string | null } | null, frame: Frame, emojis: EmojiShot[], sequences: Map<string, string>, duration: number, out: string) {
+  const { width: W, height: H } = frame;
+  let graph = [`[0:v:0]${chain ?? "null"}[v0]`];
   const inputs: string[] = [];
-  if (behindFile) {
-    const base = join(WORK, "base.mp4");
-    ffmpeg(["-i", input, "-filter_complex", `[0:v:0]${chain.join(",")}[v]`, "-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", "-t", String(duration), base], 30 * 60_000);
-    picture = base;
-    const mask = join(WORK, "mask.mkv");
-    if (segment(base, mask)) {
-      inputs.push("-i", mask);
-      graph = [
-        `[0:v:0]split[bg][fg]`,
-        `[bg]ass=filename=${behindFile}[words]`,
-        `[2:v]scale=${W}:${H}:flags=bicubic,format=gray[m]`,
-        `[fg][m]alphamerge[speaker]`,
-        `[words][speaker]overlay=format=auto,format=yuv420p[v0]`,
-      ];
-    } else {
-      graph = [`[0:v:0]ass=filename=${behindFile}[v0]`];
-    }
+  if (behind?.mask) {
+    inputs.push("-i", behind.mask);
+    graph = [
+      `[0:v:0]${chain ? `${chain},` : ""}split[bg][fg]`,
+      `[bg]ass=filename=${behind.file}[words]`,
+      `[2:v]scale=${W}:${H}:flags=bicubic,format=gray[m]`,
+      `[fg][m]alphamerge[speaker]`,
+      `[words][speaker]overlay=format=auto,format=yuv420p[v0]`,
+    ];
+  } else if (behind) {
+    graph = [`[0:v:0]${chain ? `${chain},` : ""}ass=filename=${behind.file}[v0]`];
   }
   const firstExtra = 2 + inputs.length / 2; // input numbers after the picture, the audio and the mask
   let last = "v0";
@@ -875,34 +1240,54 @@ async function main() {
     if (!words.every((w) => DRAWABLE.test(w.text))) throw new Error(`Unsupported language: ${heard.language ?? "unknown"}`);
     log(`${words.length} words (${heard.language ?? "language not reported"})`);
 
-    // 2. Captions and the edit plan.
+    // 2. Captions and the edit plan, a beat ahead of the voice (the SRT keeps the true timings).
     const style = spec.options.style;
     const look = LOOKS[style];
-    const groups = groupWords(words, new Set(), look.limits);
+    const cued = words.map((w) => ({ ...w, start: round(Math.max(0, w.start - LEAD)), end: round(Math.max(0.05, w.end - LEAD)) }));
+    const groups = groupWords(cued, new Set(), look.limits);
     const plan = await llmPlan(groups, duration, spec.options, spec.model).catch((err: Error) => {
       log(`planner failed (${redact(err.message).slice(0, 200)}); using the heuristic plan`);
       return heuristicPlan(groups, spec.options);
     });
     const zooms = spec.options.zooms ? zoomWindows(groups, plan, duration) : [];
+    const chain = pictureChain(frame, source, zooms);
     const assFile = join(WORK, "captions.ass");
-    const { ass, behind, emojis } = buildAss(groups, plan, look, frame, style, spec, duration);
-    writeFileSync(assFile, ass);
-    const behindFile = behind ? join(WORK, "behind.ass") : null;
-    if (behindFile && behind) writeFileSync(behindFile, behind);
+    let picture = input;
+    let behind: { file: string; mask: string | null } | null = null;
+    let emojis: EmojiShot[] = [];
+    let placements: Placement[] = [];
+    if (style === "behind") {
+      // The picture first, so the speaker's mask and the placement of every big word match the final frames.
+      picture = join(WORK, "base.mp4");
+      renderBase(input, chain, duration, picture);
+      const mask = join(WORK, "mask.mkv");
+      const seg = segment(picture, mask, join(WORK, "grid.bin"));
+      const bigs = (spec.options.fonts ?? []).map((f) => BIG_LOOKS[f]).filter(Boolean);
+      const built = buildBehind(groups, plan, look, bigs.length ? bigs : [BIG_LOOKS.classic], frame, spec, duration, seg);
+      writeFileSync(assFile, built.front);
+      behind = { file: join(WORK, "behind.ass"), mask: seg ? mask : null };
+      writeFileSync(behind.file, built.behind);
+      placements = built.placements;
+    } else {
+      const built = buildAss(groups, plan, look, frame, style, spec, duration);
+      writeFileSync(assFile, built.ass);
+      emojis = built.emojis;
+    }
     const sequences = spec.options.emojis ? renderEmojis(emojis, join(WORK, "emoji")) : new Map<string, string>();
     const shownEmojis = emojis.filter((e) => sequences.has(e.emoji));
 
     // 3. Sound, then the picture.
     const cues = spec.options.sfx ? sfxCues(zooms, shownEmojis, Boolean(plan.hook)) : [];
-    writeFileSync(join(WORK, "edit.json"), JSON.stringify({ words, plan, zooms, emojis: shownEmojis, cues }, null, 1)); // for support: what was decided
+    writeFileSync(join(WORK, "edit.json"), JSON.stringify({ words, plan, zooms, emojis: shownEmojis, placements, cues }, null, 1)); // for support: what was decided
     const audio = join(WORK, "audio.m4a");
     mixAudio(input, cues, speechLufs, duration, audio);
     const video = join(OUT, "brag.mp4");
-    render(input, audio, assFile, behindFile, frame, source, zooms, shownEmojis, sequences, duration, video);
+    render(picture, behind ? null : chain, audio, assFile, behind, frame, shownEmojis, sequences, duration, video);
     rmSync(input, { force: true }); // the upload can be 500 MB; the render is done with it
 
-    // 4. Poster (the hook, or the first emphasized line) and SRT.
-    const posterAt = plan.hook ? 1.2 : (groups.find((_, i) => plan.lines[i].emoji || plan.lines[i].keyword !== null)?.start ?? 0) + 0.4;
+    // 4. Poster (the hook, the first big word, or the first emphasized line) and SRT.
+    const firstBig = placements.find((p) => p.end - p.start >= 0.8);
+    const posterAt = plan.hook ? 1.2 : firstBig ? firstBig.start + 0.5 : (groups.find((_, i) => plan.lines[i].emoji || plan.lines[i].keyword !== null)?.start ?? 0) + 0.4;
     ffmpeg(["-ss", String(Math.min(posterAt, duration / 2)), "-i", video, "-frames:v", "1", "-q:v", "3", join(OUT, "brag.jpg")]);
     writeFileSync(join(OUT, "captions.srt"), srtCues(words, new Set()));
 
@@ -910,7 +1295,9 @@ async function main() {
       plan.hook ? `Hook: "${plan.hook}"` : "No hook title",
       `Captions: ${style}, ${groups.length} lines, ${words.length} words`,
       zooms.length ? `Punch-ins: ${zooms.map((z) => clock(z.start)).join(", ")}` : "No punch-ins",
-      shownEmojis.length ? `Emojis: ${shownEmojis.map((e) => `${e.emoji} ${clock(e.start)}`).join(", ")}` : "No emojis",
+      ...(style === "behind"
+        ? [`Big words: ${placements.length}, ${placements.filter((p) => p.front).length} in front of the speaker`]
+        : [shownEmojis.length ? `Emojis: ${shownEmojis.map((e) => `${e.emoji} ${clock(e.start)}`).join(", ")}` : "No emojis"]),
       `Sound effects: ${cues.length}`,
     ];
     log(`${summary.join(" | ")} | plan: ${plan.source}`);

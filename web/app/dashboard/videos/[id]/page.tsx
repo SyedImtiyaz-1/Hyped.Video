@@ -6,7 +6,7 @@ import { parseReel, reelError } from "@launchreel/core/reel";
 import { ArrowUpRight, Captions, Download, GitBranch, Globe, Upload } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { REEL_LANGUAGE_LABEL, REEL_STYLE_INFO, reelExtras, reelName } from "@/components/reels/labels";
+import { REEL_FONT_INFO, REEL_LANGUAGE_LABEL, REEL_STYLE_INFO, reelExtras, reelName } from "@/components/reels/labels";
 import { ReelPreview } from "@/components/reels/reel-preview";
 import { AutoRefresh } from "@/components/video/auto-refresh";
 import { ReviseForm } from "@/components/video/revise-form";
@@ -143,7 +143,8 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
                       </span>
                     </Row>
                     <Row label="Captions">
-                      {REEL_STYLE_INFO[reel.style].label} · {REEL_LANGUAGE_LABEL[reel.language]}
+                      {REEL_STYLE_INFO[reel.style].label}
+                      {reel.style === "behind" && ` (${reel.fonts.map((f) => REEL_FONT_INFO[f].label).join(" + ")})`} · {REEL_LANGUAGE_LABEL[reel.language]}
                     </Row>
                     <Row label="Extras">{reelExtras(reel)}</Row>
                   </>

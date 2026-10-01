@@ -26,8 +26,9 @@ function Sample({ style }: { style: ReelStyle }) {
         {/* The speaker, drawn over the word: the render puts their cut-out back on top the same way. */}
         <span className="absolute left-1/2 top-[22%] aspect-square w-[34%] -translate-x-1/2 rounded-full bg-[#0b1020]" />
         <span className="absolute left-1/2 top-[50%] h-[60%] w-[72%] -translate-x-1/2 rounded-t-[45%] bg-[#0b1020]" />
-        <span className="absolute inset-x-0 bottom-[9%] text-center text-[11px] font-semibold text-white" style={{ textShadow: "0 1px 6px rgb(0 0 0 / 0.75)" }}>
-          here&apos;s the <span style={{ color: YELLOW }}>secret</span>
+        {/* The rest of the line, small in front: the big word isn't repeated in it. */}
+        <span className="absolute inset-x-0 top-[57%] text-center text-[11px] font-bold text-white" style={{ textShadow: "0 1px 6px rgb(0 0 0 / 0.75)" }}>
+          this made me
         </span>
       </span>
     );
