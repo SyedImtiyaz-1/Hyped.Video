@@ -80,11 +80,12 @@ function Swatches({ label, value, options, onChange }: { label: string; value: s
  * Customizing a caption style: a live preview of the reel's captions on the sample frame, then font, colours, size,
  * position, words on screen, animation and capitals. Everything left alone stays the style's own.
  */
-export function LookEditor({ style, changes, onChange, fonts }: { style: ReelStyle; changes: ReelLookChanges; onChange: (changes: ReelLookChanges) => void; fonts: ReelFont[] }) {
+export function LookEditor({ style, changes, onChange, fonts }: { style: ReelStyle; changes: ReelLookChanges; onChange: (update: (changes: ReelLookChanges) => ReelLookChanges) => void; fonts: ReelFont[] }) {
   const tick = useTick();
   const look = resolveLook(style, changes);
-  // A change back to the style's own value is dropped, so "Reset" only shows when something differs.
-  const set = (patch: ReelLookChanges) => onChange(Object.fromEntries(Object.entries({ ...changes, ...patch }).filter(([, v]) => v !== undefined)) as ReelLookChanges);
+  // Each change merges into the latest changes (two quick clicks both count); one set back to the style's own value is
+  // dropped, so "Reset" only shows when something differs.
+  const set = (patch: ReelLookChanges) => onChange((current) => Object.fromEntries(Object.entries({ ...current, ...patch }).filter(([, v]) => v !== undefined)) as ReelLookChanges);
   const highlight = look.background === "band" ? look.backgroundColor : look.accent;
   // Captions at the top would meet "Behind you"'s big words.
   const positions: [string, CaptionPosition][] = style === "behind" ? [["Middle", "middle"], ["Bottom", "bottom"]] : [["Top", "top"], ["Middle", "middle"], ["Bottom", "bottom"]];
@@ -145,7 +146,7 @@ export function LookEditor({ style, changes, onChange, fonts }: { style: ReelSty
             All capitals
           </label>
           {Object.keys(changes).length > 0 && (
-            <button type="button" onClick={() => onChange({})} className="flex items-center gap-1.5 text-[13px] text-gray-900 hover:text-gray-1000">
+            <button type="button" onClick={() => onChange(() => ({}))} className="flex items-center gap-1.5 text-[13px] text-gray-900 hover:text-gray-1000">
               <RotateCcw className="size-3.5" />
               Reset to the style&apos;s look
             </button>

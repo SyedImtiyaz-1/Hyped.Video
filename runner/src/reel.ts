@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import type { JobResult } from "@launchreel/core/contract";
 import { llmCostUsd, VOICE_TIMINGS_USD_PER_MINUTE, type TokenUsage } from "@launchreel/core/pricing";
-import { CAPTION_STROKES, CAPTION_STYLES, resolveLook, type CaptionFont, type CaptionLook, type ReelLookChanges } from "@launchreel/core/captions";
+import { CAPTION_STROKES, CAPTION_STYLES, captionPlace, captionWidth, resolveLook, type CaptionFont, type CaptionLook, type ReelLookChanges } from "@launchreel/core/captions";
 import type { ReelFont, ReelLanguage, ReelOptions, ReelSpec, ReelStyle } from "@launchreel/core/reel";
 import { FACES, type Face, type FaceName } from "./fonts.ts";
 import { endsSentence, groupWords, master, round, srtCues, WEAK, type Group, type PhraseLimits, type Word } from "./media.ts";
@@ -533,13 +533,12 @@ const dialogueLine = (start: number, end: number, name: string, text: string, la
 function placeCaptions(look: CaptionLook, frame: Frame, spec: ReelSpec, markSize: number) {
   const { width: W, height: H } = frame;
   const layout = layoutFor(W, H);
-  const tall = H / W >= 1.6;
+  // Top and middle hang the lines from their height, bottom stands them on it (captionPlace, shared with the previews).
   const anchor: "top" | "bottom" = look.position === "bottom" ? "bottom" : "top";
-  const top = Math.round((look.position === "top" ? (tall ? 0.22 : layout.hookTop + 0.1) : layout.captionTop) * H);
-  const bottom = Math.round(layout.captionBottom * H);
+  const y = Math.round(captionPlace(W, H, look.position) * H);
   // The hook sits at the top, below the free plan's mark; with captions up there it moves to the middle.
-  const hookY = look.position === "top" ? Math.round(layout.captionTop * H * 0.9) : Math.round(Math.max(layout.hookTop * H, spec.watermark ? layout.markTop * H + markSize * 2.4 : 0));
-  return { anchor, top, bottom, hookY, layout };
+  const hookY = look.position === "top" ? Math.round(captionPlace(W, H, "middle") * H * 0.9) : Math.round(Math.max(layout.hookTop * H, spec.watermark ? layout.markTop * H + markSize * 2.4 : 0));
+  return { anchor, top: y, bottom: y, hookY, layout };
 }
 
 /**
@@ -557,7 +556,7 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, spec: R
   const hookSize = Math.round(0.056 * base);
   const markSize = Math.round(0.021 * base);
   const { anchor, top, bottom, hookY, layout } = placeCaptions(look, frame, spec, markSize);
-  const max = W * (1 - 2 * layout.side) * (look.background === "bar" ? 0.86 : 0.94);
+  const max = W * captionWidth(W, H, look.background === "bar");
   const x = Math.round(W / 2);
   const stroke = CAPTION_STROKES[look.style];
   const hollow = look.fill === "hollow";
@@ -1036,7 +1035,7 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
   // In front: the rest of each line, building word by word (words still to come are drawn invisible, so nothing moves).
   // It sits at the top of the safe box, or lower in it when the speaker's face is there; it stays put while it can.
   const heroes = new Map(kept.map((s) => [s.gi, s.k]));
-  const max = W * (1 - 2 * layout.side) * 0.94;
+  const max = W * captionWidth(W, H);
   const soft = `\\blur${Math.max(3, Math.round(size * 0.14))}`;
   let lastTop: number | null = null;
   groups.forEach((g, gi) => {
@@ -1048,13 +1047,14 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
     const [bw, bh] = [Math.max(...lines.map((l) => advance(faceOf(look), l.join(" "), size * scale))), lines.length * size * scale * 1.1];
     const { G, face, faceTotal } = layers(seg, g.start, g.end);
     const cover = (t: number) => onFace(face, faceTotal, G, frame, (W - bw) / 2, t, bw, bh);
-    // "Bottom" puts it at the foot of the safe box; "top" would meet the big words, so it counts as the middle.
-    const home = look.position === "bottom" ? layout.captionBottom * H - bh : layout.captionTop * H;
+    // "Bottom" stands it where every style's bottom captions go; "top" would meet the big words, so it counts as the middle.
+    const [middle, low] = [captionPlace(W, H, "middle") * H, captionPlace(W, H, "bottom") * H];
+    const home = look.position === "bottom" ? low - bh : middle;
     let top = home;
     if (cover(top) > 0.02 && lastTop !== null && cover(lastTop) <= 0.02) top = lastTop;
     else if (cover(top) > 0.02) {
       let best = Infinity;
-      for (let t = layout.captionTop * H; t + bh <= layout.captionBottom * H; t += H / 200) {
+      for (let t = middle; t + bh <= low; t += H / 200) {
         const cost = 20 * cover(t) + (0.4 * Math.abs(t - home)) / H;
         if (cost < best) [best, top] = [cost, t];
       }
