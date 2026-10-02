@@ -7,13 +7,33 @@ import { REEL_UPLOAD_TYPES, type ReelUploadType } from "@launchreel/core/reel";
 
 export type UploadedPart = { partNumber: number; etag: string };
 
-/** The R2 calls reel uploads make (the web app doesn't carry the Workers types). */
-type Bucket = {
+/** An object read from R2, with its body. */
+export type BucketObject = {
+  size: number;
+  httpEtag?: string;
+  httpMetadata?: { contentType?: string };
+  range?: { offset?: number; length?: number };
+  body: ReadableStream;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+};
+
+/** The R2 calls the web app makes: reel uploads, and the reel editor's files (the web app doesn't carry the Workers types). */
+export type Bucket = {
   createMultipartUpload(key: string, options?: { httpMetadata?: { contentType?: string } }): Promise<{ uploadId: string }>;
   resumeMultipartUpload(key: string, uploadId: string): { uploadPart(partNumber: number, body: ArrayBuffer): Promise<UploadedPart>; complete(parts: UploadedPart[]): Promise<{ size: number }>; abort(): Promise<void> };
-  get(key: string, options: { range: { offset: number; length: number } }): Promise<{ size: number; httpMetadata?: { contentType?: string }; arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  /** A range is an offset and length, or a request's headers (R2 reads their Range). */
+  get(key: string, options?: { range?: { offset: number; length: number } | Headers }): Promise<BucketObject | null>;
+  put(key: string, value: string | ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
   delete(key: string): Promise<void>;
 };
+
+/** The VIDEOS bucket, bound to the web Worker in production. */
+export async function videoBucket(): Promise<Bucket> {
+  const { env } = await getCloudflareContext({ async: true });
+  if (!env.VIDEOS) throw new Error("The VIDEOS bucket isn't bound to the web Worker");
+  return env.VIDEOS;
+}
 
 declare global {
   interface CloudflareEnv {

@@ -4,6 +4,8 @@
 //
 // Sizes are shares of sqrt(width × height), so a look scales with the video. Colours are "#RRGGBB".
 
+import { groupWords, round, type GroupOf, type PhraseLimits, type Word } from "./words";
+
 /**
  * The caption styles. "behind" puts each line's key word huge behind the speaker (their cut-out drawn back on top), with
  * small captions in front; its big words have font styles of their own (ReelFont in reel.ts).
@@ -42,6 +44,14 @@ export function captionPlace(width: number, height: number, position: CaptionPos
   return { top: 0.1, middle: 0.68, bottom: 0.92 }[position];
 }
 
+/** How far a customer may move captions from their position, as a share of the height, each way. */
+export const CAPTION_OFFSET = 0.3;
+
+/** Where a look's captions sit: its position, moved by the customer's offset, kept off the frame's edges. */
+export function captionY(width: number, height: number, look: Pick<CaptionLook, "position" | "offset">): number {
+  return Math.min(0.92, Math.max(0.08, captionPlace(width, height, look.position) + look.offset));
+}
+
 /** How wide a caption line may be, as a share of the video's width (the apps' side buttons stay clear on 9:16). */
 export function captionWidth(width: number, height: number, bar = false): number {
   const tall = height / width;
@@ -66,6 +76,8 @@ export type CaptionLook = {
   /** The line's key word, when it isn't being said. */
   keyword: string;
   position: CaptionPosition;
+  /** Moved up (negative) or down from the position, as a share of the height (CAPTION_OFFSET at most). */
+  offset: number;
   /** Words on screen at once, at most; 1 shows one word at a time. */
   words: number;
   animation: CaptionAnimation;
@@ -89,7 +101,7 @@ const GREEN = "#3BF26B";
 const LIME = "#C6FF3D";
 
 // The five original styles keep their look exactly; the rest are new. Words per line: 4 for big type, 6 for sentences.
-const base = { font: "inter", animation: "pop", stroke: "hard", fill: "solid", background: "none", backgroundColor: "#000000", glow: false, hardShadow: false } as const;
+const base = { font: "inter", animation: "pop", stroke: "hard", fill: "solid", background: "none", backgroundColor: "#000000", glow: false, hardShadow: false, offset: 0 } as const;
 export const CAPTION_STYLES: Record<ReelStyle, CaptionLook> = {
   bold: { ...base, weight: "black", casing: "upper", size: 0.066, color: WHITE, accent: YELLOW, keyword: GREEN, position: "middle", words: 4 },
   behind: { ...base, weight: "extrabold", casing: "as-said", size: 0.05, color: WHITE, accent: WHITE, keyword: WHITE, position: "middle", words: 4, stroke: "soft", animation: "fade" },
@@ -122,6 +134,72 @@ export const CAPTION_STROKES: Record<ReelStyle, { outline: number; shadow: numbe
   retro: { outline: 0, shadow: 0.07, halo: 0, back: 0 },
 };
 
+// How each style groups words: at most this many words, characters and seconds a line, a new line after a pause this
+// long, and the line held this long after its last word. Changing words-per-line scales the first three.
+export const CAPTION_LIMITS: Record<ReelStyle, PhraseLimits> = {
+  bold: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 },
+  behind: { maxWords: 4, maxChars: 24, maxSeconds: 2.2, pause: 0.45, hold: 0.5 },
+  clean: { maxWords: 6, maxChars: 30, maxSeconds: 2.6, pause: 0.5, hold: 0.6 },
+  karaoke: { maxWords: 6, maxChars: 28, maxSeconds: 3, pause: 0.6, hold: 0.6 },
+  minimal: { maxWords: 5, maxChars: 26, maxSeconds: 2.4, pause: 0.5, hold: 0.6 },
+  box: { maxWords: 5, maxChars: 26, maxSeconds: 2.2, pause: 0.5, hold: 0.5 },
+  highlight: { maxWords: 4, maxChars: 16, maxSeconds: 1.6, pause: 0.4, hold: 0.5 },
+  single: { maxWords: 1, maxChars: 14, maxSeconds: 0.9, pause: 0.3, hold: 0.3 },
+  neon: { maxWords: 4, maxChars: 18, maxSeconds: 1.8, pause: 0.45, hold: 0.5 },
+  outline: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 },
+  news: { maxWords: 7, maxChars: 38, maxSeconds: 3, pause: 0.6, hold: 0.6 },
+  retro: { maxWords: 4, maxChars: 16, maxSeconds: 1.6, pause: 0.4, hold: 0.5 },
+};
+
+/** A look's line limits: the style's own, scaled when the customer changes how many words go on screen. */
+export function captionLimits(style: ReelStyle, look: CaptionLook): PhraseLimits {
+  const preset = CAPTION_LIMITS[style];
+  const k = look.words / CAPTION_STYLES[style].words;
+  if (k === 1) return preset;
+  return { ...preset, maxWords: look.words, maxChars: Math.max(8, Math.round(preset.maxChars * k)), maxSeconds: Math.max(0.6, round(preset.maxSeconds * Math.sqrt(k))) };
+}
+
+/** Captions go up a beat before the word is heard, as editors set them: to the eye they're then on time. */
+export const CAPTION_LEAD = 0.1;
+
+/** A word on a caption line, timed a beat ahead of the voice, with its place in the reel's words (`i`, what marks point at). */
+export type CaptionWord = Word & { i: number };
+export type CaptionLine = GroupOf<CaptionWord>;
+
+/** The customer's changes to how words become lines: words left out of the captions, and words that start a line. */
+export type LineEdits = { hidden?: readonly number[]; breaks?: readonly number[] };
+
+/**
+ * The caption lines for spoken words in a look, a beat ahead of the voice: one line per word for "One word" (grouping
+ * would join a lone last word to its line), else grouped as the style groups them, with a new line wherever one was
+ * asked for. Hidden words are left out (still heard). The render and the web app's editor both use this.
+ */
+export function captionLines(words: Word[], style: ReelStyle, look: CaptionLook, edits: LineEdits = {}): CaptionLine[] {
+  const hidden = new Set(edits.hidden ?? []);
+  const cued = words
+    .map((w, i) => ({ ...w, i, start: cueOf(words, i), end: round(Math.max(0.05, w.end - CAPTION_LEAD)) }))
+    .filter((w) => !hidden.has(w.i));
+  const limits = captionLimits(style, look);
+  if (look.words !== 1) {
+    const breaks = new Set(edits.breaks ?? []);
+    return groupWords(cued, new Set(cued.flatMap((w, p) => (p > 0 && breaks.has(w.i) ? [p - 1] : []))), limits);
+  }
+  return cued.map((w, p) => {
+    const next = cued[p + 1]?.start ?? Infinity;
+    const end = next - w.end < limits.pause ? next : w.end + limits.hold;
+    return { start: w.start, end: round(Math.max(w.end, end)), text: w.text, words: [w] };
+  });
+}
+
+/** When a word's caption shows: a beat ahead of the voice (for a hidden word too: its emoji or sound keeps its time). */
+export const cueOf = (words: readonly Word[], word: number) => round(Math.max(0, words[word].start - CAPTION_LEAD));
+
+/** The line a word is on (an index into `lines`), or -1 when it's hidden. */
+export const lineOfWord = (lines: readonly CaptionLine[], word: number) => lines.findIndex((l) => l.words.some((w) => w.i === word));
+
+/** The line on screen at `time`, or -1. */
+export const lineAtTime = (lines: readonly CaptionLine[], time: number) => lines.findIndex((l) => time >= l.start && time < l.end);
+
 /** What a customer changed about a style. Size is a multiple of the style's own (0.8 to 1.5). */
 export type ReelLookChanges = {
   font?: CaptionFont;
@@ -129,6 +207,8 @@ export type ReelLookChanges = {
   accent?: string;
   size?: number;
   position?: CaptionPosition;
+  /** Moved from the position: a share of the height, CAPTION_OFFSET at most either way. */
+  offset?: number;
   words?: number;
   caps?: boolean;
   animation?: CaptionAnimation;
@@ -156,6 +236,7 @@ export function resolveLook(style: ReelStyle, changes: ReelLookChanges = {}): Ca
   }
   if (changes.size) look.size *= changes.size;
   if (changes.position) look.position = changes.position;
+  if (changes.offset) look.offset = changes.offset;
   if (changes.words) look.words = changes.words;
   if (changes.caps !== undefined) look.casing = changes.caps ? "upper" : look.casing === "upper" ? "as-said" : look.casing;
   if (changes.animation) look.animation = changes.animation;
@@ -172,6 +253,7 @@ export function parseLookChanges(value: unknown): ReelLookChanges {
   if (typeof v.accent === "string" && HEX.test(v.accent)) out.accent = v.accent.toUpperCase();
   if (typeof v.size === "number" && v.size >= CAPTION_SIZE.min && v.size <= CAPTION_SIZE.max) out.size = Math.round(v.size * 100) / 100;
   if (CAPTION_POSITIONS.includes(v.position as CaptionPosition)) out.position = v.position as CaptionPosition;
+  if (typeof v.offset === "number" && Math.abs(v.offset) <= CAPTION_OFFSET && v.offset !== 0) out.offset = Math.round(v.offset * 1000) / 1000;
   if (Number.isInteger(v.words) && (v.words as number) >= CAPTION_WORDS.min && (v.words as number) <= CAPTION_WORDS.max) out.words = v.words as number;
   if (typeof v.caps === "boolean") out.caps = v.caps;
   if (CAPTION_ANIMATIONS.includes(v.animation as CaptionAnimation)) out.animation = v.animation as CaptionAnimation;

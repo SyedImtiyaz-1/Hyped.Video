@@ -28,6 +28,11 @@
     "./voices": "./src/voices.ts",
     "./templates": "./src/templates.ts",
     "./reel": "./src/reel.ts",
-    "./captions": "./src/captions.ts"
+    "./captions": "./src/captions.ts",
+    "./words": "./src/words.ts",
+    "./effects": "./src/effects.ts",
+    "./picture": "./src/picture.ts",
+    "./sounds": "./src/sounds.ts",
+    "./timeline": "./src/timeline.ts"
   }
 }

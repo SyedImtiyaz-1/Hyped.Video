@@ -76,7 +76,8 @@ export type JobResult = {
   llmCostUsd: number;
   sdkReportedCostUsd: number;
   durationMs: number;
-  files: { video?: string; poster?: string; workspace?: string; captions?: string };
+  /** Reels also leave their editable decisions (edit) and, on the first render, a small clean preview for the editor. */
+  files: { video?: string; poster?: string; workspace?: string; captions?: string; edit?: string; preview?: string };
   shareCopy: string | null;
   plan: string | null;
 };

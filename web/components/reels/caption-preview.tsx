@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
-import { CAPTION_FONT_EM, CAPTION_STROKES, captionPlace, captionWidth, type CaptionLook, type ReelStyle } from "@launchreel/core/captions";
+import { CAPTION_FONT_EM, CAPTION_STROKES, captionWidth, captionY, type CaptionLook, type ReelStyle } from "@launchreel/core/captions";
 import { cn } from "@/lib/cn";
 import { CAPTION_FONT_CLASS } from "./caption-fonts";
 
@@ -33,17 +33,50 @@ function fitLines(words: string[], font: string, max: number): { breakAt: number
   return { breakAt: best.breakAt, scale: Math.min(1, max / best.widest) };
 }
 
-/**
- * A caption look drawn in CSS over a 9:16 frame, saying the sample line a word per `tick`: a stand-in for what libass
- * draws in the render, from the same numbers (packages/core/src/captions.ts): size, position, line width and line
- * breaks. Sizes are in container units, so it scales with the frame. Put it inside a positioned 9:16 box.
- */
+/** The sample line in a look, a word per `tick`, for the style previews. Put it inside a positioned 9:16 box. */
 export function CaptionPreview({ look, style, tick, className }: { look: CaptionLook; style: ReelStyle; tick: number; className?: string }) {
   const per = Math.max(1, look.words);
   const i = tick % SAMPLE.length;
   const from = Math.floor(i / per) * per;
   const words = SAMPLE.slice(from, from + per);
-  const active = i - from;
+  const keywords = new Set(words.map((_, k) => k).filter((k) => KEYWORDS.has(from + k)));
+  return <CaptionLine look={look} style={style} words={words} active={i - from} keywords={keywords} lineKey={from} tick={tick} className={className} />;
+}
+
+/**
+ * One caption line drawn in CSS over a 9:16 frame, `active` being the word that's being said: a stand-in for what
+ * libass draws in the render, from the same numbers (packages/core/src/captions.ts): size, position, line width and
+ * line breaks. Sizes are in container units, so it scales with the frame. `lineKey` changes when a new line starts
+ * (it fades in), `tick` when the spoken word changes (it pops). Put it inside a positioned 9:16 box.
+ */
+export function CaptionLine({
+  look,
+  style,
+  words,
+  active,
+  keywords,
+  lineKey,
+  tick,
+  className,
+  onWord,
+  selected = null,
+  onRows,
+}: {
+  look: CaptionLook;
+  style: ReelStyle;
+  words: string[];
+  active: number;
+  keywords: Set<number>;
+  lineKey: string | number;
+  tick: string | number;
+  className?: string;
+  /** Makes the words clickable (the editor: click a word on the video to edit it). */
+  onWord?: (k: number) => void;
+  /** The word being edited, outlined. */
+  selected?: number | null;
+  /** Told how many lines the caption breaks into (1 or 2). */
+  onRows?: (rows: number) => void;
+}) {
   const em = CAPTION_FONT_EM[look.font];
   const stroke = CAPTION_STROKES[style];
   // ASS sizes are shares of sqrt(width × height): for 9:16 that's 1.333 widths, so 1 cqw of width is 0.75% of it.
@@ -65,6 +98,7 @@ export function CaptionPreview({ look, style, tick, className }: { look: Caption
       const px = (look.size * 133.33 * em * frame.current.clientWidth) / 100;
       const next = fitLines(shown, `${css.fontStyle} ${css.fontWeight} ${px.toFixed(2)}px ${css.fontFamily}`, frame.current.clientWidth * captionWidth(9, 16, bar));
       setFit((f) => (f.breakAt === next.breakAt && Math.abs(f.scale - next.scale) < 0.005 ? f : next));
+      onRows?.(next.breakAt === null ? 1 : 2);
     };
     measure();
     document.fonts?.ready.then(measure);
@@ -92,11 +126,11 @@ export function CaptionPreview({ look, style, tick, className }: { look: Caption
     paintOrder: "stroke fill",
   };
   // Top and middle hang the lines from their height; bottom stands them on it.
-  const place = captionPlace(9, 16, look.position);
+  const place = captionY(9, 16, look);
   const position: CSSProperties = look.position === "bottom" ? { bottom: `${((1 - place) * 100).toFixed(1)}%` } : { top: `${(place * 100).toFixed(1)}%` };
 
   const word = (k: number) => {
-    const isKey = KEYWORDS.has(from + k);
+    const isKey = keywords.has(k);
     const said = k === active;
     const keyColor = isKey && look.keyword !== look.color ? look.keyword : null;
     let color = said ? (keyColor ?? look.accent) : (keyColor ?? look.color);
@@ -108,22 +142,45 @@ export function CaptionPreview({ look, style, tick, className }: { look: Caption
     if (said && look.animation === "pop" && look.background !== "band") Object.assign(css, { display: "inline-block", animation: "reel-pop 0.11s ease-out" });
     // The space sits outside the word, so a popping (inline-block) word keeps it.
     return (
-      <Fragment key={`${from}-${k}`}>
+      <Fragment key={`${lineKey}-${k}`}>
         {k > 0 && k !== fit.breakAt ? " " : ""}
         {k > 0 && k === fit.breakAt && <br />}
-        <span key={said ? tick : "still"} style={css}>
-          {shown[k]}
-        </span>
+        {onWord ? (
+          <span
+            key={said ? tick : "still"}
+            role="button"
+            tabIndex={0}
+            aria-label={`Edit “${words[k]}”`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onWord(k);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onWord(k);
+              }
+            }}
+            className={cn("pointer-events-auto cursor-text rounded-[0.12em] outline-offset-[0.06em] hover:outline hover:outline-[0.06em] hover:outline-white/80 focus-visible:outline focus-visible:outline-[0.06em] focus-visible:outline-white", k === selected && "outline outline-[0.08em] outline-white")}
+            style={css}
+          >
+            {shown[k]}
+          </span>
+        ) : (
+          <span key={said ? tick : "still"} style={css}>
+            {shown[k]}
+          </span>
+        )}
       </Fragment>
     );
   };
 
   return (
-    <span ref={frame} className={cn("pointer-events-none absolute inset-x-0 flex justify-center [container-type:inline-size]", className)} style={{ ...position, height: 0 }} aria-hidden>
+    <span ref={frame} className={cn("pointer-events-none absolute inset-x-0 flex justify-center [container-type:inline-size]", className)} style={{ ...position, height: 0 }} aria-hidden={onWord ? undefined : true}>
       <style>{`@keyframes reel-pop{from{transform:scale(1.14)}to{transform:scale(1)}}@keyframes reel-fade{from{opacity:0}to{opacity:1}}`}</style>
       <span
         ref={text}
-        key={look.animation === "none" ? "line" : from}
+        key={look.animation === "none" ? "line" : lineKey}
         className={cn("absolute text-center", look.position === "bottom" ? "bottom-0" : "top-0", CAPTION_FONT_CLASS[look.font])}
         style={{
           ...textStyle,

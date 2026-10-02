@@ -1,7 +1,7 @@
 "use client";
-import { RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 import type { ReactNode } from "react";
-import { CAPTION_FONTS, resolveLook, type CaptionAnimation, type CaptionPosition, type ReelLookChanges, type ReelStyle } from "@launchreel/core/captions";
+import { CAPTION_FONTS, CAPTION_OFFSET, resolveLook, type CaptionAnimation, type CaptionPosition, type ReelLookChanges, type ReelStyle } from "@launchreel/core/captions";
 import type { ReelFont } from "@launchreel/core/reel";
 import { cn } from "@/lib/cn";
 import { CAPTION_FONT_CLASS, CAPTION_FONT_LABEL } from "./caption-fonts";
@@ -80,7 +80,7 @@ function Swatches({ label, value, options, onChange }: { label: string; value: s
  * Customizing a caption style: a live preview of the reel's captions on the sample frame, then font, colours, size,
  * position, words on screen, animation and capitals. Everything left alone stays the style's own.
  */
-export function LookEditor({ style, changes, onChange, fonts }: { style: ReelStyle; changes: ReelLookChanges; onChange: (update: (changes: ReelLookChanges) => ReelLookChanges) => void; fonts: ReelFont[] }) {
+export function LookEditor({ style, changes, onChange, fonts, showPreview = true }: { style: ReelStyle; changes: ReelLookChanges; onChange: (update: (changes: ReelLookChanges) => ReelLookChanges) => void; fonts: ReelFont[]; showPreview?: boolean }) {
   const tick = useTick();
   const look = resolveLook(style, changes);
   // Each change merges into the latest changes (two quick clicks both count); one set back to the style's own value is
@@ -90,11 +90,14 @@ export function LookEditor({ style, changes, onChange, fonts }: { style: ReelSty
   // Captions at the top would meet "Behind you"'s big words.
   const positions: [string, CaptionPosition][] = style === "behind" ? [["Middle", "middle"], ["Bottom", "bottom"]] : [["Top", "top"], ["Middle", "middle"], ["Bottom", "bottom"]];
   return (
-    <div className="grid gap-4 rounded-lg border border-gray-alpha-400 p-3 sm:grid-cols-[176px_minmax(0,1fr)] sm:gap-5 sm:p-4">
-      <div>
-        <StyleFrame style={style} changes={changes} fonts={fonts} tick={tick} className="mx-auto w-[150px] rounded-md sm:w-full" />
-        <p className="mt-2 text-center text-xs text-gray-900">Live preview</p>
-      </div>
+    <div className={cn("grid gap-4 rounded-lg border border-gray-alpha-400 p-3 sm:gap-5 sm:p-4", showPreview && "sm:grid-cols-[176px_minmax(0,1fr)]")}>
+      {/* The editor has the reel itself as its preview. */}
+      {showPreview && (
+        <div>
+          <StyleFrame style={style} changes={changes} fonts={fonts} tick={tick} className="mx-auto w-[150px] rounded-md sm:w-full" />
+          <p className="mt-2 text-center text-xs text-gray-900">Live preview</p>
+        </div>
+      )}
       <div className="min-w-0 space-y-4">
         <Field label={style === "behind" ? "Caption font" : "Font"}>
           <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Font">
@@ -129,9 +132,30 @@ export function LookEditor({ style, changes, onChange, fonts }: { style: ReelSty
             <Segmented label="Size" options={SIZES} value={changes.size ?? 1} onChange={(size) => set({ size: size === 1 ? undefined : size })} />
           </Field>
           <Field label="Position">
-            <Segmented label="Position" options={positions} value={look.position === "top" && style === "behind" ? "middle" : look.position} onChange={(position) => set({ position })} />
+            <Segmented label="Position" options={positions} value={look.position === "top" && style === "behind" ? "middle" : look.position} onChange={(position) => set({ position, offset: undefined })} />
           </Field>
         </div>
+        <Field label="Fine position">
+          <div className="flex flex-wrap items-center gap-2">
+            {(
+              [
+                ["Up", -0.02, ChevronUp],
+                ["Down", 0.02, ChevronDown],
+              ] as const
+            ).map(([name, step, Icon]) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => set({ offset: Math.max(-CAPTION_OFFSET, Math.min(CAPTION_OFFSET, Math.round(((changes.offset ?? 0) + step) * 1000) / 1000)) || undefined })}
+                className="flex h-8 items-center gap-1 rounded-md border border-gray-alpha-400 px-2.5 text-[13px] text-gray-1000 hover:bg-gray-alpha-100"
+              >
+                <Icon className="size-3.5" />
+                {name}
+              </button>
+            ))}
+            <span className="text-xs text-gray-900">{changes.offset ? `${changes.offset < 0 ? "Up" : "Down"} ${Math.round(Math.abs(changes.offset) * 100)}%` : "Or drag the captions on the video"}</span>
+          </div>
+        </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Words on screen">
             <Segmented label="Words on screen" options={WORDS.map((n) => [String(n), n] as [string, number])} value={look.words} onChange={(words) => set({ words })} />

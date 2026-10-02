@@ -17,10 +17,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import type { JobResult } from "@launchreel/core/contract";
 import { llmCostUsd, VOICE_TIMINGS_USD_PER_MINUTE, type TokenUsage } from "@launchreel/core/pricing";
-import { CAPTION_STROKES, CAPTION_STYLES, captionPlace, captionWidth, resolveLook, type CaptionFont, type CaptionLook, type ReelLookChanges } from "@launchreel/core/captions";
-import type { ReelFont, ReelLanguage, ReelOptions, ReelSpec, ReelStyle } from "@launchreel/core/reel";
+import { CAPTION_STROKES, captionLimits, captionLines, captionPlace, captionWidth, captionY, cueOf, resolveLook, type CaptionFont, type CaptionLine, type CaptionLook, type ReelLookChanges } from "@launchreel/core/captions";
+import { channelExpr, channelSteps, enableExpr, type PlacedEffect } from "@launchreel/core/effects";
+import { GRAIN, gradeMatrix, LETTERBOX, VHS, VIGNETTE, type ReelPicture } from "@launchreel/core/picture";
+import { EMOJI_SIZE, parseReelEdit, type ReelEdit, type ReelFont, type ReelLanguage, type ReelOptions, type ReelSpec, type ReelStyle } from "@launchreel/core/reel";
+import { emojiShows, HOOK_END, HOOK_SOUND, HOOK_START, punchExpr, soundCues, zoomAim, zoomWindows, type SoundCue, type ZoomWindow } from "@launchreel/core/timeline";
 import { FACES, type Face, type FaceName } from "./fonts.ts";
-import { endsSentence, groupWords, master, round, srtCues, WEAK, type Group, type PhraseLimits, type Word } from "./media.ts";
+import { bare, endsSentence, master, POWER, round, srtCues, STOP, strongestWord, WEAK, type Group, type PhraseLimits, type Word } from "./media.ts";
 
 const ROOT = process.env.JOB_ROOT ?? "/workspace";
 const OUT = join(ROOT, "out");
@@ -28,8 +31,6 @@ const WORK = join(ROOT, "work");
 // The sound-effects library (CC0; see audio/README.md): /app/audio in the container, runner/audio on a laptop.
 const SFX_DIR = resolve(import.meta.dirname, "../audio/sfx");
 const FPS = 30;
-// Captions go up a beat before the word is heard, as editors set them: to the eye they're then on time.
-const LEAD = 0.1;
 // OpenAI's whisper-1, the laptop fallback for word timings. In the container it's Workers AI (VOICE_TIMINGS_USD_PER_MINUTE).
 const WHISPER_USD_PER_MINUTE = 0.006;
 
@@ -42,8 +43,6 @@ const ffmpeg = (args: string[], timeoutMs = 10 * 60_000) => {
     throw new Error(`ffmpeg failed: ${(stderr || (err as Error).message).slice(-600)}`);
   }
 };
-// Letters and digits in any script, for matching words (media.ts's norm keeps ASCII only, which blanks Devanagari).
-const bare = (s: string) => s.toLocaleLowerCase("en").replace(/[^\p{L}\p{M}\p{N}]/gu, "");
 const redact = (s: string) => s.replace(/\b(?:sk|rk)-[A-Za-z0-9_*.-]{4,}/g, "[key]");
 const even = (n: number) => Math.max(2, 2 * Math.round(n / 2));
 const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
@@ -194,15 +193,6 @@ function tidy(words: Word[], duration: number, pauses: [number, number][]): Word
   return out;
 }
 
-/** One caption line per word: up until the next word, or held a moment when a pause follows. */
-function singles(words: Word[], limits: PhraseLimits): Group[] {
-  return words.map((w, i) => {
-    const next = words[i + 1]?.start ?? Infinity;
-    const end = next - w.end < limits.pause ? next : w.end + limits.hold;
-    return { start: w.start, end: round(Math.max(w.end, end)), text: w.text, words: [w] };
-  });
-}
-
 /** Capitalizes the first word and each word after a sentence ends (romanized Hinglish comes back all lowercase). */
 function sentenceCase(words: Word[]): Word[] {
   return words.map((w, i) => (i === 0 || endsSentence(words[i - 1].text) ? { ...w, text: w.text.charAt(0).toLocaleUpperCase("en") + w.text.slice(1) } : w));
@@ -278,6 +268,87 @@ async function romanize(words: Word[], model: string): Promise<Word[]> {
 type LinePlan = { keyword: number | null; emoji: string | null; zoom: boolean };
 type Plan = { hook: string; lines: LinePlan[]; source: "llm" | "heuristic" };
 
+/**
+ * The first render's edit: the plan as marks on words and seconds, with the house rules applied, so the video is made
+ * from exactly what the editor will show. Emojis at least 3 s apart and one per 7 s; punch-ins at least 4.5 s apart, one
+ * per 6 s, clear of the hook, plus one on a key word whenever 10 s go by without; sounds on punch-ins, emoji pops and the
+ * hook, at least 1.5 s apart (punch-ins first).
+ */
+function autoEdit(words: Word[], lines: CaptionLine[], plan: Plan, options: ReelOptions, look: Look, frame: Frame, duration: number, cuts: number[]): ReelEdit {
+  const keyOf = (gi: number) => {
+    const k = plan.lines[gi].keyword;
+    return k === null ? null : lines[gi].words[k];
+  };
+  const keywords = lines.flatMap((_, gi) => (keyOf(gi) ? [keyOf(gi)!.i] : []));
+
+  const emojis: ReelEdit["emojis"] = [];
+  let lastEmoji = -Infinity;
+  if (options.emojis && options.style !== "behind")
+    lines.forEach((g, gi) => {
+      const line = plan.lines[gi];
+      const word = keyOf(gi) ?? g.words[0];
+      const end = Math.min(duration, Math.max(word.start + 1.1, g.end));
+      if (!line.emoji || word.start - lastEmoji < 3 || emojis.length >= Math.ceil(duration / 7) || end - word.start <= 0.4) return;
+      emojis.push({ word: word.i, emoji: line.emoji });
+      lastEmoji = word.start;
+    });
+
+  const zooms: ReelEdit["zooms"] = [];
+  const windows: ZoomWindow[] = [];
+  if (options.zooms) {
+    const earliest = plan.hook ? 1.5 : 0.3;
+    lines.forEach((g, gi) => {
+      const word = keyOf(gi) ?? g.words[0];
+      const start = word.start - 0.08;
+      const previous = windows[windows.length - 1];
+      // The planner's picks, plus a key word whenever 10 s have gone by without one: its counts vary from run to run.
+      const wanted = plan.lines[gi].zoom || (keyOf(gi) !== null && start - (previous?.start ?? 0) >= 10);
+      if (!wanted || windows.length >= Math.ceil(duration / 6)) return;
+      const end = Math.min(duration - 0.5, start + Math.min(2.5, Math.max(0.8, g.end - start)));
+      if (start < earliest || end - start < 0.5 || (previous && (start < previous.end + 0.45 + 0.3 || start - previous.start < 4.5))) return;
+      windows.push({ start, end, amount: 0.12 });
+      zooms.push({ word: word.i, strength: "medium" });
+    });
+  }
+
+  const sounds: ReelEdit["sounds"] = [];
+  let hookSound: ReelEdit["hookSound"] = null;
+  if (options.sfx) {
+    const moments = [
+      ...windows.map((z) => ({ at: z.start + 0.04, kind: "zoom" as const, rank: 0 })),
+      ...(plan.hook ? [{ at: HOOK_SOUND, kind: "hook" as const, rank: 1 }] : []),
+      ...emojis.map((e) => ({ at: cueOf(words, e.word), kind: "emoji" as const, rank: 2 })),
+    ].sort((a, b) => a.rank - b.rank || a.at - b.at);
+    const kept: typeof moments = [];
+    for (const m of moments) if (kept.every((k) => Math.abs(k.at - m.at) >= 1.5)) kept.push(m);
+    for (const m of kept) {
+      if (m.kind === "hook") hookSound = "bong";
+      else sounds.push({ at: round(m.at), sound: m.kind === "zoom" ? "hit" : "pop" });
+    }
+    sounds.sort((a, b) => a.at - b.at);
+  }
+
+  return {
+    version: 1,
+    duration,
+    width: frame.width,
+    height: frame.height,
+    words,
+    hidden: [],
+    breaks: [],
+    keywords,
+    emojis,
+    emojiStyle: { size: look.size < 0.045 ? "s" : "m", place: "auto" },
+    zooms,
+    sounds,
+    hookSound,
+    effects: [],
+    picture: { filter: "none", strength: 1, grain: false, vignette: false, letterbox: false },
+    cuts,
+    hook: plan.hook,
+  };
+}
+
 const EMOJI = /^\p{Extended_Pictographic}/u;
 const firstEmoji = (s: string) => {
   const g = [...new Intl.Segmenter("en", { granularity: "grapheme" }).segment(s.trim())][0]?.segment ?? "";
@@ -348,7 +419,6 @@ function cleanHook(hook: string): string {
 }
 
 // Heuristic fallback when the planner fails: numbers and a few strong words get the emphasis, emojis and zooms.
-const POWER = new Set("stop never always secret free best worst money sales double doubled triple fast easy mistake biggest only first last now today save win proven instantly results result".split(" "));
 const HINTS: [RegExp, string][] = [
   [/money|cash|sales|revenue|profit|paid|price|\$/, "💰"],
   [/grow|growth|double|doubled|triple|increase|more/, "📈"],
@@ -364,7 +434,6 @@ const HINTS: [RegExp, string][] = [
   [/see|look|watch|show/, "👀"],
   [/win|best|top/, "🏆"],
 ];
-const STOP = new Set([...WEAK, ..."i you it this they we he she was be so just have has do what here there then than will can about because until before".split(" ")]);
 
 function heuristicPlan(groups: Group[], options: ReelOptions): Plan {
   let lastZoom = -Infinity;
@@ -397,32 +466,13 @@ function heuristicPlan(groups: Group[], options: ReelOptions): Plan {
 /** A caption style with the customer's changes, and how it groups words into lines. */
 type Look = CaptionLook & { style: ReelStyle; limits: PhraseLimits };
 
-// How each style groups words: at most this many words, characters and seconds a line, a new line after a pause this
-// long, and the line held this long after its last word. Changing words-per-line scales the first three.
-const LIMITS: Record<ReelStyle, PhraseLimits> = {
-  bold: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 },
-  behind: { maxWords: 4, maxChars: 24, maxSeconds: 2.2, pause: 0.45, hold: 0.5 },
-  clean: { maxWords: 6, maxChars: 30, maxSeconds: 2.6, pause: 0.5, hold: 0.6 },
-  karaoke: { maxWords: 6, maxChars: 28, maxSeconds: 3, pause: 0.6, hold: 0.6 },
-  minimal: { maxWords: 5, maxChars: 26, maxSeconds: 2.4, pause: 0.5, hold: 0.6 },
-  box: { maxWords: 5, maxChars: 26, maxSeconds: 2.2, pause: 0.5, hold: 0.5 },
-  highlight: { maxWords: 4, maxChars: 16, maxSeconds: 1.6, pause: 0.4, hold: 0.5 },
-  single: { maxWords: 1, maxChars: 14, maxSeconds: 0.9, pause: 0.3, hold: 0.3 },
-  neon: { maxWords: 4, maxChars: 18, maxSeconds: 1.8, pause: 0.45, hold: 0.5 },
-  outline: { maxWords: 4, maxChars: 15, maxSeconds: 1.5, pause: 0.4, hold: 0.5 },
-  news: { maxWords: 7, maxChars: 38, maxSeconds: 3, pause: 0.6, hold: 0.6 },
-  retro: { maxWords: 4, maxChars: 16, maxSeconds: 1.6, pause: 0.4, hold: 0.5 },
-};
-
+// The hook title's box.
 const YELLOW = "#FFD60A";
 
 /** A style with the customer's changes applied, and its line limits. */
 function lookFor(style: ReelStyle, changes: ReelLookChanges | undefined): Look {
   const look = resolveLook(style, changes);
-  const preset = LIMITS[style];
-  const k = look.words / CAPTION_STYLES[style].words;
-  const limits = k === 1 ? preset : { ...preset, maxWords: look.words, maxChars: Math.max(8, Math.round(preset.maxChars * k)), maxSeconds: Math.max(0.6, round(preset.maxSeconds * Math.sqrt(k))) };
-  return { ...look, style, limits };
+  return { ...look, style, limits: captionLimits(style, look) };
 }
 
 // Inter comes in the look's weight; the display fonts have one face each (runner/fonts).
@@ -533,9 +583,9 @@ const dialogueLine = (start: number, end: number, name: string, text: string, la
 function placeCaptions(look: CaptionLook, frame: Frame, spec: ReelSpec, markSize: number) {
   const { width: W, height: H } = frame;
   const layout = layoutFor(W, H);
-  // Top and middle hang the lines from their height, bottom stands them on it (captionPlace, shared with the previews).
+  // Top and middle hang the lines from their height, bottom stands them on it (captionY, shared with the previews).
   const anchor: "top" | "bottom" = look.position === "bottom" ? "bottom" : "top";
-  const y = Math.round(captionPlace(W, H, look.position) * H);
+  const y = Math.round(captionY(W, H, look) * H);
   // The hook sits at the top, below the free plan's mark; with captions up there it moves to the middle.
   const hookY = look.position === "top" ? Math.round(captionPlace(W, H, "middle") * H * 0.9) : Math.round(Math.max(layout.hookTop * H, spec.watermark ? layout.markTop * H + markSize * 2.4 : 0));
   return { anchor, top: y, bottom: y, hookY, layout };
@@ -545,9 +595,9 @@ function placeCaptions(look: CaptionLook, frame: Frame, spec: ReelSpec, markSize
  * The captions, hook title and watermark as one ASS file for libass, and where each emoji goes, for any caption style.
  * Every word change is its own event, so the spoken word can take the accent colour (and pop) without moving the rest
  * of the line. Boxes, marker bands and bars are drawn shapes on a layer below the words, sized from the fonts' exact
- * measurements.
+ * measurements. `keywords` are the highlighted words; `shows` the emojis, as the timeline times them.
  */
-function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, spec: ReelSpec, duration: number): { ass: string; emojis: EmojiShot[] } {
+function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnType<typeof emojiShows>, emojiStyle: ReelEdit["emojiStyle"], hook: string, look: Look, frame: Frame, spec: ReelSpec, duration: number): { ass: string; emojis: EmojiShot[] } {
   const { width: W, height: H } = frame;
   const base = Math.sqrt(W * H);
   const size = Math.round(look.size * base);
@@ -575,22 +625,23 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, spec: R
   };
   // A soft halo is the outline blurred; a glow is a wide blurred outline in the accent colour, drawn underneath.
   const soft = look.stroke === "soft" ? `\\blur${Math.max(3, Math.round(size * 0.14))}` : "";
-  const emojis: EmojiShot[] = [];
-  const emojiSize = even((look.size < 0.045 ? 0.08 : 0.115) * base);
+  const emojiSize = even(EMOJI_SIZE[emojiStyle.size] * base);
+  // Each line's height on screen, for the emojis beside it.
+  const blocks: number[] = [];
   const space = advance(face, " ", size);
   const lineHeight = size;
   const ascent = (face.asc / (face.asc + face.desc)) * size;
   const capHeight = (glyphOf(face, "H")[4] * size) / (face.asc + face.desc);
 
   groups.forEach((g, gi) => {
-    const line = plan.lines[gi];
     const words = g.words.map((w) => shown(w.text, look));
     const { lines, scale } = lineBreak(words, face, size, max);
+    blocks[gi] = lineHeight * scale * lines.length;
     const fs = scale < 1 ? `\\fs${Math.floor(size * scale)}` : "";
     const pos = anchor === "top" ? `\\an8\\pos(${x},${top})` : `\\an2\\pos(${x},${bottom})`;
     const breaks = new Set<number>(lines.length > 1 ? [lines[0].length] : []);
     const join = (parts: string[]) => parts.map((p, i) => (i > 0 ? (breaks.has(i) ? "\\N" : " ") : "") + p).join("");
-    const isKey = (i: number) => line.keyword === i;
+    const isKey = (i: number) => keywords.has(g.words[i].i);
     const faceFor = (i: number) => (isKey(i) && keyFace !== face ? keyFace : face);
     const fad = look.animation === "none" ? "" : look.animation === "fade" ? "\\fad(120,0)" : "\\fad(60,0)";
 
@@ -679,24 +730,24 @@ function buildAss(groups: Group[], plan: Plan, look: Look, frame: Frame, spec: R
       });
     }
 
-    // The emoji pops in by the caption when its keyword (or the line) starts, and stays at least 1.1 s. At least 3 s
-    // apart and one per 7 s at most, like the punch-ins. Above the caption, or below it when captions are at the top.
-    const at = line.keyword !== null ? g.words[line.keyword].start : g.start;
-    if (line.emoji && at - (emojis[emojis.length - 1]?.start ?? -Infinity) >= 3 && emojis.length < Math.ceil(duration / 7)) {
-      const block = lineHeight * scale * lines.length;
-      const y = look.position === "top" ? top + block + 0.015 * H : anchor === "top" ? top - 0.012 * H - emojiSize : bottom - block - 0.01 * H - emojiSize;
-      const end = Math.min(duration, Math.max(at + 1.1, g.end));
-      if (end - at > 0.4) emojis.push({ emoji: line.emoji, start: round(at), end: round(end), x: Math.round(x - emojiSize / 2), y: Math.round(y), size: emojiSize });
-    }
   });
 
-  if (plan.hook) {
-    const words = plan.hook.toLocaleUpperCase("en").split(" ").map(assText);
+  // Each emoji pops in by its line as its word is said: above the caption, or below it (by default below when captions
+  // are at the top). Without a line on screen, it goes where a one-line caption would be.
+  const emojis: EmojiShot[] = shows.map((s) => {
+    const block = s.line >= 0 ? blocks[s.line] : lineHeight;
+    const below = emojiStyle.place === "below" || (emojiStyle.place === "auto" && look.position === "top");
+    const y = below ? (anchor === "top" ? top + block + 0.015 * H : bottom + 0.015 * H) : anchor === "top" ? top - 0.012 * H - emojiSize : bottom - block - 0.01 * H - emojiSize;
+    return { emoji: s.emoji, start: s.start, end: s.end, x: Math.round(x - emojiSize / 2), y: Math.round(Math.min(H - emojiSize, Math.max(0, y))), size: emojiSize };
+  });
+
+  if (hook) {
+    const words = hook.toLocaleUpperCase("en").split(" ").map(assText);
     const { lines, scale } = lineBreak(words, FACES["Inter Black"], hookSize, W * 0.8);
     const text = lines.map((l) => l.join(" ")).join("\\N");
-    const end = Math.min(2.6, duration - 0.1);
+    const end = Math.min(HOOK_END, duration - 0.1);
     dialogue(
-      0.1,
+      HOOK_START,
       end,
       "Hook",
       `{\\an8\\pos(${x},${hookY})\\frz1.5${scale < 1 ? `\\fs${Math.floor(hookSize * scale)}` : ""}\\fscx80\\fscy80\\t(0,160,\\fscx100\\fscy100)\\fad(120,180)}${text}`,
@@ -925,19 +976,6 @@ function balance(words: string[], n: number, look: BigLook): string[] {
   return best.map((l) => l.join(" "));
 }
 
-/** A line's strongest word, when the plan gave it none: a number, a power word, else the longest word that isn't filler. */
-function strongest(g: Group): number | null {
-  let [best, top] = [null as number | null, 0];
-  g.words.forEach((w, k) => {
-    const n = bare(w.text);
-    const digits = /\d/.test(n);
-    if (!digits && (n.length < 3 || STOP.has(n))) return;
-    const score = (digits ? 20 : POWER.has(n) ? 10 : 0) + Math.min(n.length, 10);
-    if (score > top) [best, top] = [k, score];
-  });
-  return best;
-}
-
 /** One big word, or the hook, as placed: what it says, when, where, and how much the speaker hides (for edit.json). */
 type Placement = { text: string; start: number; end: number; front: boolean; hidden: number; peak: number; face: number; light: number; y: number; width: number };
 
@@ -946,7 +984,7 @@ type Placement = { text: string; start: number; end: number; front: boolean; hid
  * of the line small in front, building word by word. Returns the ASS drawn under the speaker's cut-out, the ASS drawn
  * over it, and every placement.
  */
-function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], frame: Frame, spec: ReelSpec, duration: number, seg: Seg | null): { behind: string; front: string; placements: Placement[] } {
+function buildBehind(groups: CaptionLine[], keywords: Set<number>, hook: string, look: Look, bigs: BigLook[], frame: Frame, spec: ReelSpec, duration: number, seg: Seg | null): { behind: string; front: string; placements: Placement[] } {
   const { width: W, height: H } = frame;
   const first: Face = FACES[bigs[0].face];
   const base = Math.sqrt(W * H);
@@ -998,18 +1036,20 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
   };
 
   // The hook, for the first 2.5 s, in the first font style.
-  const hookEnd = plan.hook ? Math.min(2.6, duration - 0.1) : 0;
-  if (plan.hook) {
-    const words = plan.hook.split(" ").map((w) => bigText(w, bigs[0])).filter(Boolean);
+  const hookEnd = hook ? Math.min(HOOK_END, duration - 0.1) : 0;
+  if (hook) {
+    const words = hook.split(" ").map((w) => bigText(w, bigs[0])).filter(Boolean);
     const lines = balance(words, words.length <= 2 ? 1 : words.length <= 5 ? 2 : 3, bigs[0]);
-    draw(bigs[0], lines, place(bigs[0], lines, 0.1, hookEnd, seg, frame, band, HOOK_AIM, (tall ? 0.075 : 0.1) * H * lines.length, null), 0.1, hookEnd);
+    draw(bigs[0], lines, place(bigs[0], lines, HOOK_START, hookEnd, seg, frame, band, HOOK_AIM, (tall ? 0.075 : 0.1) * H * lines.length, null), HOOK_START, hookEnd);
   }
 
   // Each line's big word: from when it's said to the end of the line (0.8 s at least), never into the next one or
   // across a cut. One said just before a cut waits for the new shot.
   const shots: { gi: number; k: number; start: number; end: number }[] = [];
   groups.forEach((g, gi) => {
-    const k = plan.lines[gi].keyword ?? strongest(g);
+    // The line's first highlighted word, else its strongest.
+    const marked = g.words.findIndex((w) => keywords.has(w.i));
+    const k = marked >= 0 ? marked : strongestWord(g.words);
     if (k === null || g.words[k].start < hookEnd) return;
     let [start, end] = [Math.max(0, g.words[k].start - 0.05), Math.min(duration, Math.max(g.end, g.words[k].start + 0.8))];
     const cut = cuts.find((c) => c > start && c < end);
@@ -1022,7 +1062,7 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
   // With several font styles the words take turns, in the order they were picked (after the hook's).
   let previous: { y: number; end: number } | null = null;
   for (const [n, s] of kept.entries()) {
-    const big = bigs[(n + (plan.hook ? 1 : 0)) % bigs.length];
+    const big = bigs[(n + (hook ? 1 : 0)) % bigs.length];
     const text = bigText(groups[s.gi].words[s.k].text, big);
     if (!text) continue;
     // Near the previous word when it's the same shot and just before: the words shouldn't jump about.
@@ -1048,7 +1088,7 @@ function buildBehind(groups: Group[], plan: Plan, look: Look, bigs: BigLook[], f
     const { G, face, faceTotal } = layers(seg, g.start, g.end);
     const cover = (t: number) => onFace(face, faceTotal, G, frame, (W - bw) / 2, t, bw, bh);
     // "Bottom" stands it where every style's bottom captions go; "top" would meet the big words, so it counts as the middle.
-    const [middle, low] = [captionPlace(W, H, "middle") * H, captionPlace(W, H, "bottom") * H];
+    const [middle, low] = [(captionPlace(W, H, "middle") + look.offset) * H, (captionPlace(W, H, "bottom") + look.offset) * H];
     const home = look.position === "bottom" ? low - bh : middle;
     let top = home;
     if (cover(top) > 0.02 && lastTop !== null && cover(lastTop) <= 0.02) top = lastTop;
@@ -1129,86 +1169,28 @@ function renderEmojis(shots: EmojiShot[], dir: string): Map<string, string> {
   return sequences;
 }
 
-/* ---------- zooms and sound ---------- */
-
-type Zoom = { start: number; end: number; amount: number };
+/* ---------- sound ---------- */
 
 /**
- * Punch-ins: ease in over 0.3 s just before the keyword, hold to the end of the line (0.8-2.5 s), ease out over 0.45 s.
- * At least 4.5 s apart and one per 6 s at most (the planner asks for fewer, but doesn't always count), none while
- * the hook title lands.
+ * The soundtrack: the speaker's own audio brought to about -16 LUFS, the effects under it (each starting early enough to
+ * land on its moment: timeline.ts), the whole mix mastered to -14 LUFS. It starts at 0 on the video's clock (silence
+ * fills any late start), like the recognized words.
  */
-function zoomWindows(groups: Group[], plan: Plan, duration: number): Zoom[] {
-  const zooms: Zoom[] = [];
-  const earliest = plan.hook ? 1.5 : 0.3;
-  groups.forEach((g, i) => {
-    const line = plan.lines[i];
-    const start = (line.keyword !== null ? g.words[line.keyword].start : g.start) - 0.08;
-    const previous = zooms[zooms.length - 1];
-    // The planner's picks, plus a keyword line whenever 10 s have gone by without one: its counts vary from run to run.
-    const wanted = line.zoom || (line.keyword !== null && start - (previous?.start ?? 0) >= 10);
-    if (!wanted || zooms.length >= Math.ceil(duration / 6)) return;
-    const end = Math.min(duration - 0.5, start + Math.min(2.5, Math.max(0.8, g.end - start)));
-    if (start < earliest || end - start < 0.5 || (previous && (start < previous.end + 0.45 + 0.3 || start - previous.start < 4.5))) return; // overlapping, or too soon after the last one
-    zooms.push({ start: round(start), end: round(end), amount: zooms.length % 2 ? 0.13 : 0.11 });
-  });
-  return zooms;
-}
-
-/** The zoom factor as an ffmpeg expression of time (frame number / fps): 1 + a smooth bump per punch-in. */
-function zoomExpression(zooms: Zoom[]) {
-  const t = `(in/${FPS})`;
-  const bumps = zooms.map((z) => {
-    const rise = `(1-pow(1-clip((${t}-${z.start})/0.3,0,1),3))`; // ease out (cubic)
-    const fall = `(0.5-0.5*cos(PI*clip((${t}-${z.end})/0.45,0,1)))`; // ease in and out (sine)
-    return `${z.amount}*${rise}*(1-${fall})`;
-  });
-  return `1+${bumps.join("+") || "0"}`;
-}
-
-// A few warm, low-risk effects from the library (audio/sfx/sfx-analysis.md), each with the gain that sits it about
-// 10 dB under speech that's been brought to -16 LUFS.
-const SFX = {
-  zoom: [
-    { file: "impact/impactSoft_medium_001.ogg", gainDb: -12 },
-    { file: "impact/impactSoft_medium_004.ogg", gainDb: -12 },
-    { file: "impact/impactSoft_medium_002.ogg", gainDb: -12 },
-  ],
-  emoji: [
-    { file: "interface/drop_002.ogg", gainDb: -8 },
-    { file: "interface/drop_003.ogg", gainDb: -8 },
-  ],
-  hook: [{ file: "interface/bong_001.ogg", gainDb: -13 }],
-};
-type Cue = { at: number; file: string; gainDb: number };
-
-/** Sound on the punch-ins, emoji pops and the hook: at least 1.5 s apart (punch-ins win), never the same one twice in a row. */
-function sfxCues(zooms: Zoom[], emojis: EmojiShot[], hook: boolean): Cue[] {
-  const moments = [
-    ...zooms.map((z) => ({ at: z.start + 0.04, kind: "zoom" as const, rank: 0 })),
-    ...(hook ? [{ at: 0.12, kind: "hook" as const, rank: 1 }] : []),
-    ...emojis.map((e) => ({ at: e.start, kind: "emoji" as const, rank: 2 })),
-  ].sort((a, b) => a.rank - b.rank || a.at - b.at);
-  const kept: typeof moments = [];
-  for (const m of moments) if (kept.every((k) => Math.abs(k.at - m.at) >= 1.5)) kept.push(m);
-  const used = { zoom: 0, emoji: 0, hook: 0 };
-  return kept.sort((a, b) => a.at - b.at).map((m) => ({ at: round(m.at), ...SFX[m.kind][used[m.kind]++ % SFX[m.kind].length] }));
-}
-
-/**
- * The soundtrack: the speaker's own audio brought to about -16 LUFS, the effects under it, the whole mix mastered to
- * -14 LUFS. It starts at 0 on the video's clock (silence fills any late start), like the recognized words.
- */
-function mixAudio(input: string, cues: Cue[], speechLufs: number, duration: number, out: string) {
+function mixAudio(input: string, cues: SoundCue[], speechLufs: number, duration: number, out: string) {
   const gain = Math.max(-12, Math.min(24, -16 - speechLufs)).toFixed(1);
   const format = "aresample=48000:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo";
   const graph = [
     `[0:a:0]${format},volume=${gain}dB,apad=whole_dur=${duration},atrim=0:${duration}[speech]`,
-    ...cues.map((c, i) => `[${i + 1}:a]${format},volume=${c.gainDb}dB,adelay=${Math.round(c.at * 1000)}|${Math.round(c.at * 1000)}[s${i}]`),
+    ...cues.map((c, i) => {
+      const delay = Math.round(c.start * 1000);
+      return `[${i + 1}:a]${c.skip > 0 ? `atrim=start=${c.skip},asetpts=PTS-STARTPTS,` : ""}${format},volume=${c.gainDb}dB,adelay=${delay}|${delay}[s${i}]`;
+    }),
     cues.length ? `[speech]${cues.map((_, i) => `[s${i}]`).join("")}amix=inputs=${cues.length + 1}:duration=first:normalize=0[mix]` : "[speech]anull[mix]",
   ];
   const premix = join(WORK, "premix.wav");
-  ffmpeg(["-i", input, ...cues.flatMap((c) => ["-i", join(SFX_DIR, c.file)]), "-filter_complex", graph.join(";"), "-map", "[mix]", "-c:a", "pcm_f32le", premix]);
+  const script = join(WORK, "audio.filter");
+  writeFileSync(script, graph.join(";\n"));
+  ffmpeg(["-i", input, ...cues.flatMap((c) => ["-i", join(SFX_DIR, c.file)]), "-filter_complex_script", script, "-map", "[mix]", "-c:a", "pcm_f32le", premix]);
   master(premix, out);
 }
 
@@ -1235,31 +1217,77 @@ function segment(video: string, mask: string, gridFile: string): Seg | null {
   }
 }
 
-/** The picture's filters: big uploads scaled down, HDR tone-mapped, 30 fps, fitted to the frame, and the punch-ins. */
-function pictureChain(frame: Frame, source: Probe, zooms: Zoom[]): string {
+/** The picture's filters: big uploads scaled down, HDR tone-mapped, 30 fps, fitted to the frame, and the punch-ins and the effects' moves (zoom and shake), all in one zoompan. */
+function pictureChain(frame: Frame, source: Probe, zooms: ZoomWindow[], effects: PlacedEffect[]): string {
   const { width: W, height: H } = frame;
   const chain: string[] = [];
   // Big uploads (4K) are brought down first, keeping some room for the punch-ins, so the rest runs on fewer pixels.
   if (Math.max(source.width, source.height) > Math.max(W, H) * 1.3) chain.push(`scale=${even(W * 1.15)}:${even(H * 1.15)}`);
   if (source.hdr) chain.push("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p");
   chain.push(`fps=fps=${FPS}:start_time=0`);
-  // Punch-ins lean to the upper middle, where faces usually are.
-  const cy = H / W >= 1.15 ? 0.4 : 0.45;
-  chain.push(zooms.length ? `zoompan=z='${zoomExpression(zooms)}':x='(iw-iw/zoom)/2':y='clip(ih*${cy}-ih/zoom/2,0,ih-ih/zoom)':d=1:s=${W}x${H}:fps=${FPS}` : `scale=${W}:${H}:flags=bicubic`);
+  // What's in view, as timeline.ts's viewport(): zoomed around a point a little above the middle (faces), moved by the
+  // effects, kept inside the picture.
+  const t = `(in/${FPS})`;
+  const zoom = [punchExpr(zooms, t), channelExpr(effects, "zoom", t)].filter((e) => e !== "0");
+  const [dx, dy] = [channelExpr(effects, "dx", t), channelExpr(effects, "dy", t)];
+  if (zoom.length || dx !== "0" || dy !== "0") {
+    const aim = zoomAim(W, H);
+    chain.push(`zoompan=z='1+${zoom.join("+") || "0"}':x='clip((iw-iw/zoom)/2-(${dx})*iw/zoom,0,iw-iw/zoom)':y='clip(ih*${aim}-ih/zoom/2-(${dy})*ih/zoom,0,ih-ih/zoom)':d=1:s=${W}x${H}:fps=${FPS}`);
+  } else chain.push(`scale=${W}:${H}:flags=bicubic`);
   chain.push("setsar=1,format=yuv420p");
+  return chain.join(",");
+}
+
+/**
+ * The picture's look after its moves, in the order the editor layers it: the colour filter (one matrix, the alpha column
+ * carrying the offsets), VHS's extras, the effects' blur, colour split and grain, their flashes to white or black (eq,
+ * mixing toward white or black; its brightness counts in hundredths, so the numbers allow for that), then the overlays.
+ * Empty when there's nothing to do.
+ */
+function lookChain(frame: Frame, picture: ReelPicture, effects: PlacedEffect[]): string {
+  const { width: W, height: H } = frame;
+  const chain: string[] = [];
+  const grade = gradeMatrix(picture.filter, picture.strength);
+  if (grade) {
+    const [rr, rg, rb, ra, gr, gg, gb, ga, br, bg, bb, ba] = grade.map((n) => n.toFixed(4));
+    chain.push(`format=rgba,colorchannelmixer=rr=${rr}:rg=${rg}:rb=${rb}:ra=${ra}:gr=${gr}:gg=${gg}:gb=${gb}:ga=${ga}:br=${br}:bg=${bg}:bb=${bb}:ba=${ba},format=yuv420p`);
+  }
+  if (picture.filter === "vhs" && picture.strength > 0) {
+    const shift = Math.max(1, Math.round(VHS.rgb * W * picture.strength));
+    chain.push(`rgbashift=rh=${-shift}:bh=${shift}`, `noise=c0s=${Math.round(VHS.noise * 40 * picture.strength)}:c0f=t+u`, `drawgrid=w=iw:h=${Math.max(3, Math.round(VHS.lines * W))}:t=1:c=black@${(VHS.lineAlpha * picture.strength).toFixed(2)}`);
+  }
+  for (const { level, windows } of channelSteps(effects, "blur")) chain.push(`gblur=sigma=${(level * W).toFixed(2)}:enable='${enableExpr(windows)}'`);
+  for (const { level, windows } of channelSteps(effects, "rgb")) {
+    const shift = Math.max(1, Math.round(level * W));
+    chain.push(`rgbashift=rh=${-shift}:bh=${shift}:enable='${enableExpr(windows)}'`);
+  }
+  for (const { level, windows } of channelSteps(effects, "noise")) chain.push(`noise=c0s=${Math.round(level * 40)}:c0f=t+u:enable='${enableExpr(windows)}'`);
+  const white = channelExpr(effects, "white", "t");
+  if (white !== "0") chain.push(`eq=contrast='1-${white}':brightness='if(gt(${white},0),0.4188*${white}+0.005,0)':saturation='1-${white}':eval=frame`);
+  const black = channelExpr(effects, "black", "t");
+  if (black !== "0") chain.push(`eq=contrast='1-${black}':brightness='if(gt(${black},0),0.005-0.4384*${black},0)':saturation='1-${black}':eval=frame`);
+  if (picture.grain) chain.push(`noise=c0s=${GRAIN.strength}:c0f=t+u`);
+  if (picture.vignette) chain.push(`vignette=angle=${VIGNETTE.angle.toFixed(4)}`);
+  if (picture.letterbox) {
+    const bar = Math.round(LETTERBOX * H);
+    chain.push(`drawbox=x=0:y=0:w=iw:h=${bar}:color=black:t=fill`, `drawbox=x=0:y=ih-${bar}:w=iw:h=${bar}:color=black:t=fill`);
+  }
   return chain.join(",");
 }
 
 /** "Behind you", first pass: the picture alone, nearly lossless, so the speaker's mask and the placement match the final frames. */
 function renderBase(input: string, chain: string, duration: number, out: string) {
-  ffmpeg(["-i", input, "-filter_complex", `[0:v:0]${chain}[v]`, "-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", "-t", String(duration), out], 30 * 60_000);
+  const script = join(WORK, "base.filter");
+  writeFileSync(script, `[0:v:0]${chain}[v]`);
+  ffmpeg(["-i", input, "-filter_complex_script", script, "-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", "-t", String(duration), out], 30 * 60_000);
 }
 
 /**
- * The picture (through `chain`, or already prepared by renderBase), emoji overlays, then libass draws the captions, hook
- * and watermark on top. "Behind you" draws its big words on the picture first and lays the speaker's cut-out back over them.
+ * The picture (through `chain`, or already prepared by renderBase), its look (`look`), emoji overlays, then libass draws
+ * the captions, hook and watermark on top. "Behind you" draws its big words on the picture first and lays the speaker's
+ * cut-out back over them.
  */
-function render(picture: string, chain: string | null, audio: string, assFile: string, behind: { file: string; mask: string | null } | null, frame: Frame, emojis: EmojiShot[], sequences: Map<string, string>, duration: number, out: string) {
+function render(picture: string, chain: string | null, look: string, audio: string, assFile: string, behind: { file: string; mask: string | null } | null, frame: Frame, emojis: EmojiShot[], sequences: Map<string, string>, duration: number, out: string) {
   const { width: W, height: H } = frame;
   let graph = [`[0:v:0]${chain ?? "null"}[v0]`];
   const inputs: string[] = [];
@@ -1275,8 +1303,12 @@ function render(picture: string, chain: string | null, audio: string, assFile: s
   } else if (behind) {
     graph = [`[0:v:0]${chain ? `${chain},` : ""}ass=filename=${behind.file}[v0]`];
   }
-  const firstExtra = 2 + inputs.length / 2; // input numbers after the picture, the audio and the mask
   let last = "v0";
+  if (look) {
+    graph.push(`[v0]${look}[vl]`);
+    last = "vl";
+  }
+  const firstExtra = 2 + inputs.length / 2; // input numbers after the picture, the audio and the mask
   const placed = emojis.filter((e) => sequences.has(e.emoji));
   placed.forEach((e, i) => {
     inputs.push("-framerate", String(FPS), "-i", sequences.get(e.emoji)!);
@@ -1294,6 +1326,28 @@ function render(picture: string, chain: string | null, audio: string, assFile: s
   // re-encode every upload, so a cleaner source (medium, CRF 18) survives their compression better.
   const encode = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-maxrate", "10M", "-bufsize", "20M", "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", String(FPS)];
   ffmpeg(["-i", picture, "-i", audio, ...inputs, "-filter_complex_script", script, "-map", "[vout]", "-map", "1:a", ...encode, "-c:a", "copy", "-t", String(duration), "-movflags", "+faststart", out], 30 * 60_000);
+}
+
+/**
+ * Where the video cuts from one shot to the next (seconds): where transitions fit. ffmpeg's scene score for every frame
+ * (small, so it's quick); a cut is a frame that scores far above the frames around it. A jump cut in a talking-head video
+ * (same person, same room) scores only about 0.05, but 50-100 times its neighbours (a quick gesture can reach 0.03);
+ * a change of scene scores 0.3 and up.
+ */
+function findCuts(file: string): number[] {
+  const log = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-an", "-vf", "scale=160:-2,select='gte(scene,0)',metadata=print", "-f", "null", "-"], { encoding: "utf8", maxBuffer: 256 << 20, timeout: 5 * 60_000 }).stderr ?? "";
+  const frames: { t: number; score: number }[] = [];
+  for (const m of log.matchAll(/pts_time:([\d.]+)[\s\S]*?lavfi\.scene_score=([\d.]+)/g)) frames.push({ t: Number(m[1]), score: Number(m[2]) });
+  const cuts: number[] = [];
+  frames.forEach((f, i) => {
+    if (f.t < 0.2 || f.score < 0.04) return;
+    const around = [...frames.slice(Math.max(0, i - 15), i), ...frames.slice(i + 1, i + 16)].map((x) => x.score).sort((a, b) => a - b);
+    const median = around[Math.floor(around.length / 2)] ?? 0;
+    const peak = f.score >= Math.max(...around.slice(-2), 0);
+    // A flash or a fast pan scores high a few frames running: one cut a half second at most.
+    if ((f.score >= 0.3 || (f.score >= 12 * median && peak)) && f.t - (cuts[cuts.length - 1] ?? -Infinity) > 0.5) cuts.push(round(f.t));
+  });
+  return cuts;
 }
 
 /* ---------- the job ---------- */
@@ -1328,31 +1382,49 @@ async function main() {
     const frame = outputSize(source.width, source.height);
     log(`${source.width}×${source.height} ${duration} s${source.hdr ? " HDR" : ""} → ${frame.width}×${frame.height}, ${spec.options.style}`);
 
-    // 1. The words, timed.
+    // 1. The words, timed: heard, or (re-exporting an edited reel) as edited.
     const speech = join(WORK, "speech.wav");
     ffmpeg(["-i", input, "-map", "0:a:0", "-vn", "-af", "aresample=16000:first_pts=0", "-ac", "1", "-c:a", "pcm_s16le", speech]);
     const speechLufs = loudness(speech);
     if (speechLufs < -60) throw new Error("No speech: the sound track is silent");
-    const heard = await transcribe(speech, spec.options.language);
-    timedMinutes = duration / 60;
-    let words = tidy(heard.words, duration, silences(speech));
-    if (!words.length) throw new Error("No speech: nothing was recognized");
-    if (words.some((w) => DEVANAGARI.test(w.text))) words = await romanize(words, spec.model);
-    if (!words.every((w) => DRAWABLE.test(w.text))) throw new Error(`Unsupported language: ${heard.language ?? "unknown"}`);
-    log(`${words.length} words (${heard.language ?? "language not reported"})`);
+    const edited = spec.edit ? parseReelEdit(JSON.parse(readFileSync(join(ROOT, "edit.json"), "utf8"))) : null;
+    if (spec.edit && !edited) throw new Error("Edit missing: the edited reel's words couldn't be read");
+    let words: Word[];
+    if (edited) {
+      words = edited.words;
+      log(`${words.length} words, as edited`);
+    } else {
+      const heard = await transcribe(speech, spec.options.language);
+      timedMinutes = duration / 60;
+      words = tidy(heard.words, duration, silences(speech));
+      if (!words.length) throw new Error("No speech: nothing was recognized");
+      if (words.some((w) => DEVANAGARI.test(w.text))) words = await romanize(words, spec.model);
+      if (!words.every((w) => DRAWABLE.test(w.text))) throw new Error(`Unsupported language: ${heard.language ?? "unknown"}`);
+      log(`${words.length} words (${heard.language ?? "language not reported"})`);
+    }
 
-    // 2. Captions and the edit plan, a beat ahead of the voice (the SRT keeps the true timings).
+    // 2. The edit: as edited, or planned now (captions a beat ahead of the voice; the SRT keeps the true timings). The
+    // video is made from exactly this edit, the one the editor opens.
     const style = spec.options.style;
     const look = lookFor(style, spec.options.look);
-    const cued = words.map((w) => ({ ...w, start: round(Math.max(0, w.start - LEAD)), end: round(Math.max(0.05, w.end - LEAD)) }));
-    // "One word" shows each word on its own (groupWords would join a lone last word to its line).
-    const groups = look.words === 1 ? singles(cued, look.limits) : groupWords(cued, new Set(), look.limits);
-    const plan = await llmPlan(groups, duration, spec.options, spec.model).catch((err: Error) => {
-      log(`planner failed (${redact(err.message).slice(0, 200)}); using the heuristic plan`);
-      return heuristicPlan(groups, spec.options);
-    });
-    const zooms = spec.options.zooms ? zoomWindows(groups, plan, duration) : [];
-    const chain = pictureChain(frame, source, zooms);
+    let edit: ReelEdit;
+    let planned = "edit";
+    if (edited) edit = edited;
+    else {
+      const heardLines = captionLines(words, style, look);
+      const plan = await llmPlan(heardLines, duration, spec.options, spec.model).catch((err: Error) => {
+        log(`planner failed (${redact(err.message).slice(0, 200)}); using the heuristic plan`);
+        return heuristicPlan(heardLines, spec.options);
+      });
+      planned = plan.source;
+      edit = autoEdit(words, heardLines, plan, spec.options, look, frame, duration, []);
+    }
+    const groups = captionLines(edit.words, style, look, edit);
+    const keywords = new Set(edit.keywords);
+    const hook = spec.options.hook ? cleanHook(edit.hook) : "";
+    const zooms = spec.options.zooms ? zoomWindows(edit, groups) : [];
+    const chain = pictureChain(frame, source, zooms, edit.effects);
+    const lookFilters = lookChain(frame, edit.picture, edit.effects);
     const assFile = join(WORK, "captions.ass");
     let picture = input;
     let behind: { file: string; mask: string | null } | null = null;
@@ -1365,13 +1437,14 @@ async function main() {
       const mask = join(WORK, "mask.mkv");
       const seg = segment(picture, mask, join(WORK, "grid.bin"));
       const bigs = (spec.options.fonts ?? []).map((f) => BIG_LOOKS[f]).filter(Boolean);
-      const built = buildBehind(groups, plan, look, bigs.length ? bigs : [BIG_LOOKS.classic], frame, spec, duration, seg);
+      const built = buildBehind(groups, keywords, hook, look, bigs.length ? bigs : [BIG_LOOKS.classic], frame, spec, duration, seg);
       writeFileSync(assFile, built.front);
       behind = { file: join(WORK, "behind.ass"), mask: seg ? mask : null };
       writeFileSync(behind.file, built.behind);
       placements = built.placements;
     } else {
-      const built = buildAss(groups, plan, look, frame, spec, duration);
+      const shows = spec.options.emojis ? emojiShows(edit, groups) : [];
+      const built = buildAss(groups, keywords, shows, edit.emojiStyle, hook, look, frame, spec, duration);
       writeFileSync(assFile, built.ass);
       emojis = built.emojis;
     }
@@ -1379,30 +1452,47 @@ async function main() {
     const shownEmojis = emojis.filter((e) => sequences.has(e.emoji));
 
     // 3. Sound, then the picture.
-    const cues = spec.options.sfx ? sfxCues(zooms, shownEmojis, Boolean(plan.hook)) : [];
-    writeFileSync(join(WORK, "edit.json"), JSON.stringify({ words, plan, zooms, emojis: shownEmojis, placements, cues }, null, 1)); // for support: what was decided
+    const cues = spec.options.sfx ? soundCues(edit, Boolean(hook)) : [];
+    if (!edited) {
+      // The picture without captions, punch-ins or effects at half size, with the voice, for the editor's live preview;
+      // and where it cuts from shot to shot, where transitions fit.
+      const gain = Math.max(-12, Math.min(24, -16 - speechLufs)).toFixed(1);
+      const preview = join(OUT, "preview.mp4");
+      ffmpeg(["-i", input, "-filter_complex", `[0:v:0]${pictureChain(frame, source, [], [])},scale=${even(frame.width / 2)}:${even(frame.height / 2)}[v]`, "-map", "[v]", "-map", "0:a:0", "-af", `volume=${gain}dB`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-t", String(duration), "-movflags", "+faststart", preview], 10 * 60_000);
+      edit.cuts = findCuts(preview);
+    }
+    // What the editor opens to change this reel later (the hook is kept even when it's switched off, so switching it
+    // back on brings it back), and for support, what was decided.
+    writeFileSync(join(OUT, "edit.json"), JSON.stringify(edit));
+    writeFileSync(join(WORK, "edit.json"), JSON.stringify({ edit, zooms, emojis: shownEmojis, placements, cues }, null, 1));
     const audio = join(WORK, "audio.m4a");
     mixAudio(input, cues, speechLufs, duration, audio);
     const video = join(OUT, "brag.mp4");
-    render(picture, behind ? null : chain, audio, assFile, behind, frame, shownEmojis, sequences, duration, video);
+    render(picture, behind ? null : chain, lookFilters, audio, assFile, behind, frame, shownEmojis, sequences, duration, video);
     rmSync(input, { force: true }); // the upload can be 500 MB; the render is done with it
 
-    // 4. Poster (the hook, the first big word, or the first emphasized line) and SRT.
+    // 4. Poster (the hook, the first big word, or the first line with a highlight or an emoji) and SRT (shown words only).
     const firstBig = placements.find((p) => p.end - p.start >= 0.8);
-    const posterAt = plan.hook ? 1.2 : firstBig ? firstBig.start + 0.5 : (groups.find((_, i) => plan.lines[i].emoji || plan.lines[i].keyword !== null)?.start ?? 0) + 0.4;
+    const marked = new Set([...edit.keywords, ...edit.emojis.map((e) => e.word)]);
+    const posterAt = hook ? 1.2 : firstBig ? firstBig.start + 0.5 : (groups.find((g) => g.words.some((w) => marked.has(w.i)))?.start ?? 0) + 0.4;
     ffmpeg(["-ss", String(Math.min(posterAt, duration / 2)), "-i", video, "-frames:v", "1", "-q:v", "3", join(OUT, "brag.jpg")]);
-    writeFileSync(join(OUT, "captions.srt"), srtCues(words, new Set()));
+    const hidden = new Set(edit.hidden);
+    writeFileSync(join(OUT, "captions.srt"), srtCues(edit.words.filter((_, i) => !hidden.has(i)), new Set()));
 
     const summary = [
-      plan.hook ? `Hook: "${plan.hook}"` : "No hook title",
-      `Captions: ${style}, ${groups.length} lines, ${words.length} words`,
+      hook ? `Hook: "${hook}"` : "No hook title",
+      `Captions: ${style}, ${groups.length} lines, ${edit.words.length} words${hidden.size ? ` (${hidden.size} hidden)` : ""}`,
       zooms.length ? `Punch-ins: ${zooms.map((z) => clock(z.start)).join(", ")}` : "No punch-ins",
       ...(style === "behind"
         ? [`Big words: ${placements.length}, ${placements.filter((p) => p.front).length} in front of the speaker`]
         : [shownEmojis.length ? `Emojis: ${shownEmojis.map((e) => `${e.emoji} ${clock(e.start)}`).join(", ")}` : "No emojis"]),
+      edit.effects.length ? `Effects: ${edit.effects.map((e) => `${e.effect} ${clock(e.at)}`).join(", ")}` : "No effects",
+      ...(edit.picture.filter !== "none" || edit.picture.grain || edit.picture.vignette || edit.picture.letterbox
+        ? [`Look: ${[edit.picture.filter !== "none" && edit.picture.filter, edit.picture.grain && "grain", edit.picture.vignette && "vignette", edit.picture.letterbox && "letterbox"].filter(Boolean).join(", ")}`]
+        : []),
       `Sound effects: ${cues.length}`,
     ];
-    log(`${summary.join(" | ")} | plan: ${plan.source}`);
+    log(`${summary.join(" | ")} | plan: ${planned}`);
     finish({
       ok: true,
       engine: "openai",
@@ -1412,7 +1502,7 @@ async function main() {
       llmCostUsd: cost(),
       sdkReportedCostUsd: 0,
       durationMs: Date.now() - started,
-      files: { video: "out/brag.mp4", poster: "out/brag.jpg", captions: "out/captions.srt" },
+      files: { video: "out/brag.mp4", poster: "out/brag.jpg", captions: "out/captions.srt", edit: "out/edit.json", ...(spec.edit ? {} : { preview: "out/preview.mp4" }) },
       shareCopy: null,
       plan: summary.join("\n"),
     });

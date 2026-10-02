@@ -10,3 +10,8 @@ export * from "@prisma/client";
 export * from "./repo-token";
 export * from "./captions";
 export * from "./reel";
+export * from "./words";
+export * from "./effects";
+export * from "./picture";
+export * from "./sounds";
+export * from "./timeline";
