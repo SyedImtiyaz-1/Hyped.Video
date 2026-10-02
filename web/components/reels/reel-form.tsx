@@ -193,7 +193,7 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
 
           <div>
             <Label>Customize</Label>
-            <LookEditor style={options.style} changes={options.look} onChange={(look) => setOptions((o) => ({ ...o, look }))} fonts={options.fonts} />
+            <LookEditor style={options.style} changes={options.look} onChange={(update) => setOptions((o) => ({ ...o, look: update(o.look) }))} fonts={options.fonts} />
           </div>
 
           <div>

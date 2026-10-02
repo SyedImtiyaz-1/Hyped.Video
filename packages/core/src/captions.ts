@@ -27,6 +27,27 @@ const capPixels = (font: CaptionFont) => CAPTION_FONT_CAP[font] * CAPTION_FONT_E
 
 export type CaptionPosition = "top" | "middle" | "bottom";
 export const CAPTION_POSITIONS: readonly CaptionPosition[] = ["top", "middle", "bottom"];
+
+/**
+ * Where captions sit, as a share of the video's height: "top" and "middle" hang the lines from it, "bottom" stands them
+ * on it. On 9:16 (Reels, TikTok, Shorts) the bottom stops above the apps' own captions and buttons, which cover about
+ * the bottom fifth; wider videos keep the subtitle-style lower area as their middle. The render and the previews both
+ * place captions with this.
+ */
+export function captionPlace(width: number, height: number, position: CaptionPosition): number {
+  const tall = height / width;
+  if (tall >= 1.6) return { top: 0.2, middle: 0.5, bottom: 0.78 }[position];
+  if (tall >= 1.15) return { top: 0.14, middle: 0.6, bottom: 0.86 }[position];
+  if (tall >= 0.9) return { top: 0.12, middle: 0.64, bottom: 0.9 }[position];
+  return { top: 0.1, middle: 0.68, bottom: 0.92 }[position];
+}
+
+/** How wide a caption line may be, as a share of the video's width (the apps' side buttons stay clear on 9:16). */
+export function captionWidth(width: number, height: number, bar = false): number {
+  const tall = height / width;
+  const side = tall >= 1.6 ? 0.11 : tall >= 1.15 ? 0.08 : tall >= 0.9 ? 0.07 : 0.06;
+  return (1 - 2 * side) * (bar ? 0.86 : 0.94);
+}
 export type CaptionAnimation = "pop" | "fade" | "none";
 export const CAPTION_ANIMATIONS: readonly CaptionAnimation[] = ["pop", "fade", "none"];
 
