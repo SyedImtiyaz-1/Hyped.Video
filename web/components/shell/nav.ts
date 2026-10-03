@@ -27,6 +27,7 @@ const TITLES: Record<string, string> = {
   "/dashboard": "Overview",
   "/dashboard/videos": "Videos",
   "/dashboard/new": "New video",
+  "/dashboard/start": "New video",
   "/dashboard/templates": "Templates",
   "/dashboard/reels": "Reels",
   "/dashboard/usage": "Usage",

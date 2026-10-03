@@ -12,6 +12,7 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { PrivateRepoToken, saveRepoToken, type RepoTokenSetup } from "./private-repo-token";
+import { normalizeSourceUrl } from "@/lib/source-url";
 
 const TONES = [
   { value: "", label: "Auto", hint: "We pick what fits your product" },
@@ -144,15 +145,7 @@ const STEPS = [
 const LAST = STEPS.length - 1;
 
 /** Makes "acme.com" a full URL; returns null when it still isn't one. */
-function normalizeUrl(value: string): string | null {
-  let url = value.trim();
-  if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
-  try {
-    return new URL(url).hostname.includes(".") ? url : null;
-  } catch {
-    return null;
-  }
-}
+const normalizeUrl = normalizeSourceUrl;
 
 export function NewVideoForm({
   credits,

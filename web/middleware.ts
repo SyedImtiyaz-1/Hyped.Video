@@ -7,7 +7,15 @@ const isProtected = createRouteMatcher(["/dashboard(.*)", "/api/jobs(.*)", "/api
 // Demo mode (development only) skips auth entirely; see lib/demo.ts.
 const demo = process.env.DEMO_MODE === "true" && process.env.NODE_ENV !== "production";
 
+// Someone starting their first video is almost always new: sign-up, not sign-in, then back to the same page.
+const isStart = createRouteMatcher(["/dashboard/start(.*)"]);
+
 const clerk = clerkMiddleware(async (auth, req) => {
+  if (isStart(req) && !(await auth()).userId) {
+    const signUp = new URL("/sign-up", req.url);
+    signUp.searchParams.set("redirect_url", req.url);
+    return NextResponse.redirect(signUp);
+  }
   if (isProtected(req)) await auth.protect();
 });
 

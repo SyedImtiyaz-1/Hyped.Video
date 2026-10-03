@@ -9,6 +9,7 @@ import { money } from "@/lib/format";
 import { visitorCurrency } from "@/lib/region";
 import { HERO, SHOWCASE, posterSrc, videoSrc } from "@/lib/showcase";
 import { studioAvailable } from "@/lib/studio";
+import { StartForm } from "@/components/start-form";
 
 const STEPS = [
   { icon: Link2, title: "Paste a URL or repo", body: "Your website, or a GitHub repo, public or private. We read your real copy, colors, fonts and UI." },
@@ -79,15 +80,16 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
           <p className="mx-auto mt-6 max-w-2xl text-lg text-gray-900 md:text-xl">
             Paste your website or GitHub repo. In about 15 minutes you get a polished launch video with music, motion, an optional AI voiceover and share copy, built from your actual UI instead of stock footage.
           </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <ButtonLink href="/dashboard" variant="primary" size="lg">
-              Make your first video <ArrowRight />
-            </ButtonLink>
-            <ButtonLink href="#pricing" size="lg">
+          <StartForm className="mt-8" />
+          <p className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[13px] text-gray-900">
+            <span>5 free credits. No card required.</span>
+            <a href="/templates" className="underline-offset-2 hover:text-gray-1000 hover:underline">
+              Start from a template
+            </a>
+            <a href="#pricing" className="underline-offset-2 hover:text-gray-1000 hover:underline">
               See pricing
-            </ButtonLink>
-          </div>
-          <p className="mt-4 text-[13px] text-gray-900">5 free credits. No card required.</p>
+            </a>
+          </p>
 
           {HERO && (
             <div className="relative mx-auto mt-16 max-w-4xl">
@@ -191,7 +193,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
                 <p className="mt-0.5 text-sm text-gray-900">{TRIAL_CREDITS > PACKS.STARTER.credits ? "More than the Starter pack, and no card needed." : "No card needed."} Free videos carry a small watermark.</p>
               </div>
             </div>
-            <ButtonLink href="/dashboard" className="shrink-0">
+            <ButtonLink href="/dashboard/start" className="shrink-0">
               Start free
             </ButtonLink>
           </div>
@@ -254,7 +256,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
         <div className="relative mx-auto flex max-w-[1200px] flex-col items-center gap-6 px-4 py-24 text-center md:px-8">
           <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-5xl">Your launch deserves a video.</h2>
           <p className="max-w-md text-gray-900">Paste a link. Get a launch video in minutes. The first one is on us.</p>
-          <ButtonLink href="/dashboard" variant="primary" size="lg">
+          <ButtonLink href="/dashboard/start" variant="primary" size="lg">
             Make your first video <ArrowRight />
           </ButtonLink>
         </div>
