@@ -46,7 +46,7 @@ const shape = (info: VideoInfo) => (!info.width || !info.height ? null : info.he
 
 type Picked = { file: File; type: ReelUploadType; info: VideoInfo; url: string };
 
-export function ReelForm({ credits, trial }: { credits: number; trial: boolean }) {
+export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number; reelCredits?: number; trial: boolean }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const upload = useRef<UploadJob | null>(null);
@@ -62,7 +62,9 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
   const [error, setError] = useState<{ message: string; upgrade?: boolean } | null>(null);
   const cost = picked ? creditsForReel(picked.info.duration) : null;
   const busy = phase !== "idle";
-  const enough = cost === null || credits >= cost;
+  // Reel credits (from a reel pack) pay first, then credits, as /api/reels charges.
+  const fromReels = cost !== null && reelCredits >= cost;
+  const enough = cost === null || fromReels || credits >= cost;
 
   useEffect(() => () => upload.current?.cancel(), []);
   useEffect(() => () => void (picked && URL.revokeObjectURL(picked.url)), [picked]);
@@ -275,8 +277,8 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
           )}
           <div className="flex items-center justify-between gap-3 px-5 py-4">
             <span className={cn("text-[13px] tabular-nums", enough ? "text-gray-900" : "text-amber-900")}>
-              {cost ? plural(cost, "credit") : "1–2 credits"}
-              <span className="hidden sm:inline"> · you have {credits}</span>
+              {fromReels ? plural(cost, "reel credit") : cost ? plural(cost, "credit") : "1–2 credits"}
+              <span className="hidden sm:inline"> · you have {fromReels || (cost === null && reelCredits > 0) ? plural(reelCredits, "reel credit") : credits}</span>
             </span>
             <div className="flex items-center gap-2">
               {phase === "uploading" && (
@@ -290,8 +292,8 @@ export function ReelForm({ credits, trial }: { credits: number; trial: boolean }
                   {!busy && <ArrowRight />}
                 </Button>
               ) : (
-                <ButtonLink href="/dashboard/billing" variant="primary">
-                  Get credits
+                <ButtonLink href="/dashboard/billing#reels" variant="primary">
+                  Get reels
                 </ButtonLink>
               )}
             </div>

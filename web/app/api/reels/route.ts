@@ -63,7 +63,9 @@ export async function POST(req: Request) {
   const active = await db.job.count({ where: { userId: user.id, status: { in: ["QUEUED", "RUNNING"] } } });
   if (active >= 3) return NextResponse.json({ error: "You already have 3 videos in progress" }, { status: 429 });
 
-  const paid = await db.creditEntry.count({ where: { userId: user.id, delta: { gt: 0 }, NOT: { reason: "signup_trial" } } });
+  const paid = await db.creditEntry.count({ where: { userId: user.id, reason: { startsWith: "purchase:" } } });
+  // Reel credits (from a reel pack) pay first, then credits; the job remembers which, so a refund goes back there.
+  const paidWith = user.reelCredits >= cost ? "reels" : "credits";
   const { width, height } = body;
   const reel: ReelJob = {
     style: body.style,
@@ -91,14 +93,15 @@ export async function POST(req: Request) {
       format: width && height ? (height > width * 1.15 ? "vertical" : width > height * 1.15 ? "landscape" : "square") : "vertical",
       durationSec: Math.ceil(body.durationSec),
       creditsCost: cost,
-      watermark: paid === 0, // free trial: this account has never bought credits
+      watermark: paid === 0, // free trial: this account has never bought a pack
+      paidWith,
       music: "none",
       reel,
       status: "QUEUED",
     },
   });
   try {
-    await spendCredits(db, user.id, cost, `job:${job.id}`);
+    await spendCredits(db, user.id, cost, `job:${job.id}`, paidWith);
   } catch {
     await db.job.delete({ where: { id: job.id } });
     return NextResponse.json({ error: "Not enough credits", upgrade: true }, { status: 402 });
@@ -108,7 +111,7 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error(`[reels] could not start render for ${job.id}`, err);
     await db.job.update({ where: { id: job.id }, data: { status: "FAILED", error: "Could not start the render", finishedAt: new Date() } });
-    await grantCredits(db, user.id, cost, `refund:${job.id}`, `refund:${job.id}`);
+    await grantCredits(db, user.id, cost, `refund:${job.id}`, `refund:${job.id}`, paidWith);
     return NextResponse.json({ error: "Rendering is unavailable right now. Your credits were refunded." }, { status: 503 });
   }
   return NextResponse.json({ id: job.id });

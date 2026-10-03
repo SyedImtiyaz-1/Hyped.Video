@@ -32,6 +32,7 @@ const SECRETS = [
   { worker: "web", name: "DODO_PRODUCT_STARTER", from: ".env", why: "the Starter pack" },
   { worker: "web", name: "DODO_PRODUCT_CREATOR", from: ".env", why: "the Creator pack" },
   { worker: "web", name: "DODO_PRODUCT_PRO", from: ".env", why: "the Pro pack" },
+  { worker: "web", name: "DODO_PRODUCT_REELS", from: ".env", why: "the Reel pack" },
 ];
 
 let failed = false;

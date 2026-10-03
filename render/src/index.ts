@@ -39,6 +39,9 @@ import {
 export { ContainerProxy } from "@cloudflare/sandbox";
 
 /** One container per video. */
+
+/** The balance a job was paid from, for its refund (jobs from before reel packs paid with credits). */
+const balanceOf = (paidWith: string | undefined): "credits" | "reels" => (paidWith === "reels" ? "reels" : "credits");
 export class VideoSandbox extends Sandbox<Env> {}
 
 // Virtual hosts: they never leave Cloudflare and need no TLS trust inside the container.
@@ -180,6 +183,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         template: j.template,
         kind: j.kind,
         reel: j.reel,
+        paidWith: j.paidWith,
       };
     });
     if (!job) return;
@@ -334,7 +338,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
           });
         } else {
           await db.job.update({ where: { id: jobId }, data: { ...done, status: "FAILED", error: redactSecrets(outcome.error ?? "Render failed").slice(0, 2000) } });
-          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
         }
       });
     } catch (err) {
@@ -342,7 +346,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
       await step.do("fail and refund", async () => {
         const db = createDb(this.env.HYPERDRIVE.connectionString);
         await db.job.update({ where: { id: jobId }, data: { status: "FAILED", error: redactSecrets(`Render error: ${String(err)}`).slice(0, 500), finishedAt: new Date() } });
-        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
       });
     }
 
@@ -377,7 +381,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
    * land under a video's names, so the media route and the video page work as they are. The upload is deleted once
    * the reel is delivered; a failed reel keeps it for support until the bucket's uploads/ lifecycle rule clears it.
    */
-  private async reel(jobId: string, job: { userId: string; creditsCost: number; watermark: boolean; reel: unknown }, step: WorkflowStep) {
+  private async reel(jobId: string, job: { userId: string; creditsCost: number; watermark: boolean; reel: unknown; paidWith?: string }, step: WorkflowStep) {
     const processId = "render-reel";
     const reel = parseReel(job.reel);
     let finished = false;
@@ -474,7 +478,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
           await db.job.update({ where: { id: jobId }, data: { ...done, ...attempt.media, status: "SUCCEEDED", plan: attempt.plan } });
         } else {
           await db.job.update({ where: { id: jobId }, data: { ...done, status: "FAILED", error: redactSecrets(attempt.error ?? "Reel failed").slice(0, 2000) } });
-          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
         }
       });
       // The upload stays, so the reel can be edited and re-exported for free: the bucket's lifecycle rule for uploads/
@@ -485,7 +489,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
       await step.do("fail and refund", async () => {
         const db = createDb(this.env.HYPERDRIVE.connectionString);
         await db.job.update({ where: { id: jobId }, data: { status: "FAILED", error: redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 500), finishedAt: new Date() } });
-        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
       });
     }
 
@@ -757,7 +761,7 @@ export default {
     });
     for (const job of stale) {
       await db.job.update({ where: { id: job.id }, data: { status: "FAILED", error: "Render timed out", finishedAt: new Date() } });
-      await grantCredits(db, job.userId, job.creditsCost, `refund:${job.id}`, `refund:${job.id}`);
+      await grantCredits(db, job.userId, job.creditsCost, `refund:${job.id}`, `refund:${job.id}`, balanceOf(job.paidWith));
       await sandboxFor(env, job.id).destroy().catch(() => {});
       await sendJobEmail(env, db, job.id).catch((err) => console.error(`job ${job.id}: email not sent: ${redactSecrets(String(err)).slice(0, 300)}`));
       await sendFailureAlert(env, db, job.id).catch((err) => console.error(`job ${job.id}: alert not sent: ${redactSecrets(String(err)).slice(0, 300)}`));

@@ -16,6 +16,8 @@ import { SearchBox } from "./search-box";
 
 export type ShellProps = {
   credits: number;
+  /** Reel credits from a reel pack (they only make reels). */
+  reelCredits?: number;
   email: string;
   isAdmin: boolean;
   demo: boolean;
@@ -58,7 +60,7 @@ export function AppShell(props: ShellProps) {
   );
 }
 
-function Sidebar({ credits, email, isAdmin, userSlot, demo, collapsed }: ShellProps & { collapsed: boolean }) {
+function Sidebar({ credits, reelCredits = 0, email, isAdmin, userSlot, demo, collapsed }: ShellProps & { collapsed: boolean }) {
   const pathname = usePathname();
   const lowCredits = credits < 1;
   return (
@@ -142,7 +144,10 @@ function Sidebar({ credits, email, isAdmin, userSlot, demo, collapsed }: ShellPr
               <span className="font-medium text-gray-1000">Credits</span>
               <span className={cn("tabular-nums", lowCredits ? "text-amber-900" : "text-gray-900")}>{credits} left</span>
             </div>
-            <p className="mt-1 text-xs text-gray-900">{lowCredits ? "Buy credits to make more videos" : `Enough for ${plural(credits, "short video")}`}</p>
+            <p className="mt-1 text-xs text-gray-900">
+              {lowCredits ? "Buy credits to make more videos" : `Enough for ${plural(credits, "short video")}`}
+              {reelCredits > 0 && ` · ${plural(reelCredits, "reel")}`}
+            </p>
           </Link>
         )}
         <div className={cn("flex items-center gap-2", collapsed && "flex-col")}>

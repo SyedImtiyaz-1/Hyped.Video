@@ -78,6 +78,19 @@ export const INR_COUNTRIES = ["IN"];
 export const packPrice = (key: PackKey, currency: Currency) => (currency === "inr" ? PACKS[key].priceInr : PACKS[key].priceUsd);
 /** What one credit costs in a pack. */
 export const perCredit = (key: PackKey, currency: Currency) => packPrice(key, currency) / PACKS[key].credits;
+
+/**
+ * Reel packs: reel credits that make reels only (the customer's own video, captioned and edited), one a reel up to 90
+ * seconds and two up to 3 minutes (creditsForReel), priced for creators. A reel costs us about a cent of AI and a few
+ * cents of compute, so ₹499 for 20 keeps most of it after Dodo's fee. Like the credit packs: a Dodo product each
+ * (DODO_PRODUCT_<KEY>), the rupee price in India by billing country, dollars everywhere else, never expiring. A reel
+ * uses reel credits first, then credits.
+ */
+export const REEL_PACKS = {
+  REELS: { name: "Reel pack", reels: 20, priceUsd: 6, priceInr: 499 },
+} as const satisfies Record<string, { name: string; reels: number; priceUsd: number; priceInr: number }>;
+export type ReelPackKey = keyof typeof REEL_PACKS;
+export const reelPackPrice = (key: ReelPackKey, currency: Currency) => (currency === "inr" ? REEL_PACKS[key].priceInr : REEL_PACKS[key].priceUsd);
 /** For /admin's margin math only (Dodo converts at live rates): rupees per dollar, and the GST inside rupee prices. */
 export const INR_PER_USD_ESTIMATE = 96;
 export const INDIA_GST = 0.18;

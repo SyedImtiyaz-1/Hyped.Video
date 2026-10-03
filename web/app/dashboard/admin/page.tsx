@@ -1,4 +1,4 @@
-import { INDIA_GST, INR_PER_USD_ESTIMATE, PACKS, unitEconomics, type PackKey } from "@launchreel/core";
+import { INDIA_GST, INR_PER_USD_ESTIMATE, PACKS, REEL_PACKS, unitEconomics, type PackKey } from "@launchreel/core";
 import { purchasedPacks } from "@/lib/ledger";
 import { getDb } from "@/lib/db";
 import { notFound, redirect } from "next/navigation";
@@ -30,13 +30,15 @@ export default async function Admin() {
   const avg = (f: (j: (typeof jobs)[number]) => number | null) => (done.length ? done.reduce((a, j) => a + (f(j) ?? 0), 0) / done.length : 0);
   const p90 = done.map((j) => unitEconomics(j).total).sort((a, b) => a - b)[Math.floor(done.length * 0.9)] ?? 0;
   // Pack revenue by currency: the ledger records the packs, plus "@INR" for rupees ("purchase:CREATOR@INR").
-  const purchases = await db.creditEntry.findMany({ where: { reason: { startsWith: "purchase:" }, createdAt: { gte: since } }, select: { reason: true } });
+  // A payment's credits and reel credits are separate lines with the same reason: each counts only its own packs.
+  const purchases = await db.creditEntry.findMany({ where: { reason: { startsWith: "purchase:" }, createdAt: { gte: since } }, select: { reason: true, balance: true } });
   const revenue = { usd: 0, inr: 0 };
   for (const p of purchases) {
-    const { keys, currency } = purchasedPacks(p.reason.slice("purchase:".length));
-    for (const k of keys) {
-      if (currency === "INR") revenue.inr += PACKS[k].priceInr;
-      else revenue.usd += PACKS[k].priceUsd;
+    const { keys, reelKeys, currency } = purchasedPacks(p.reason.slice("purchase:".length));
+    const prices = p.balance === "reels" ? reelKeys.map((k) => REEL_PACKS[k]) : keys.map((k) => PACKS[k]);
+    for (const price of prices) {
+      if (currency === "INR") revenue.inr += price.priceInr;
+      else revenue.usd += price.priceUsd;
     }
   }
   // What one credit costs us: 30-day cost over the credits that delivered videos used.

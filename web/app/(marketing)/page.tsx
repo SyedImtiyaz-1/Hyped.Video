@@ -2,6 +2,8 @@ import { ArrowRight, AudioLines, Captions, Check, Clapperboard, FileText, Gift, 
 import { PACKS, QUALITY_CREDIT_MULTIPLIER, TEMPLATES, TRIAL_CREDITS, perCredit, templateById, type Template } from "@launchreel/core";
 import { CreditTable } from "@/components/credit-table";
 import { PackCards, PriceNote, cheapestPack } from "@/components/pricing/pack-cards";
+import { ReelPackCard } from "@/components/pricing/reel-pack-card";
+import { reelPackOn } from "@/lib/dodo";
 import { ShowcaseGallery } from "@/components/showcase/showcase-gallery";
 import { TemplateCard } from "@/components/templates/template-gallery";
 import { ButtonLink } from "@/components/ui/button";
@@ -202,6 +204,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
             <PackCards currency={currency} />
           </div>
           <PriceNote currency={currency} className="mt-4" />
+          {reelPackOn() && <ReelPackCard currency={currency} className="mt-8" />}
           <p className="mt-6 max-w-3xl text-sm text-gray-900">
             For comparison, a 30–60 second explainer from a freelancer on Fiverr usually costs $170–$350{currency === "inr" ? " (about ₹16,000–₹34,000)" : ""} and takes 5–7 days, according to{" "}
             <a href="https://www.fiverr.com/resources/guides/costs/content-creator" target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-gray-1000">

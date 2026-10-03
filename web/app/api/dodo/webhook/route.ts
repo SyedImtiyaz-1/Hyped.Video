@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { PACKS, grantCredits, revokeCredits, type Db } from "@launchreel/core";
+import { PACKS, REEL_PACKS, grantCredits, revokeCredits, type Db, type PackKey, type ReelPackKey } from "@launchreel/core";
 import { getDb } from "@/lib/db";
 import { dodo, packFor } from "@/lib/dodo";
 
 type DodoEvent = ReturnType<ReturnType<typeof dodo>["webhooks"]["unwrap"]>;
 
 // Subscribe the Dodo webhook to: payment.succeeded, refund.succeeded, dispute.opened, dispute.won.
-// Credits come only from one-time packs; there are no subscriptions.
+// Credits come only from one-time packs (credit packs, and reel packs whose reel credits only make reels); there are
+// no subscriptions.
 // Every grant is keyed so retries and duplicate events never double-credit.
 export async function POST(req: Request) {
   const body = await req.text();
@@ -27,13 +28,17 @@ export async function POST(req: Request) {
       const userId = await resolveUser(db, p.metadata, p.customer);
       if (!userId) break;
       const lines = p.product_cart ?? [];
-      const credits = lines.reduce((sum, line) => {
+      let [credits, reels] = [0, 0];
+      for (const line of lines) {
         const key = packFor(line.product_id);
-        return sum + (key ? PACKS[key].credits * line.quantity : 0);
-      }, 0);
+        if (key && key in PACKS) credits += PACKS[key as PackKey].credits * line.quantity;
+        else if (key && key in REEL_PACKS) reels += REEL_PACKS[key as ReelPackKey].reels * line.quantity;
+      }
       // "purchase:CREATOR", with "@INR" when paid in rupees, so /admin can count revenue in the right currency.
       const packs = lines.map((l) => packFor(l.product_id) ?? l.product_id).join("+");
-      await grantCredits(db, userId, credits, `purchase:${packs}${p.currency && p.currency !== "USD" ? `@${p.currency}` : ""}`, `pay:${p.payment_id}`);
+      const reason = `purchase:${packs}${p.currency && p.currency !== "USD" ? `@${p.currency}` : ""}`;
+      await grantCredits(db, userId, credits, reason, `pay:${p.payment_id}`);
+      await grantCredits(db, userId, reels, reason, `pay:${p.payment_id}:reels`, "reels");
       break;
     }
 
@@ -48,8 +53,11 @@ export async function POST(req: Request) {
       break;
     }
     case "dispute.won": {
-      const revoked = await db.creditEntry.findUnique({ where: { paymentRef: `dispute:${event.data.dispute_id}` } });
-      if (revoked && revoked.delta < 0) await grantCredits(db, revoked.userId, -revoked.delta, "dispute_won", `dispute-won:${event.data.dispute_id}`);
+      for (const balance of ["credits", "reels"] as const) {
+        const tail = balance === "reels" ? ":reels" : "";
+        const revoked = await db.creditEntry.findUnique({ where: { paymentRef: `dispute:${event.data.dispute_id}${tail}` } });
+        if (revoked && revoked.delta < 0) await grantCredits(db, revoked.userId, -revoked.delta, "dispute_won", `dispute-won:${event.data.dispute_id}${tail}`, balance);
+      }
       break;
     }
   }
@@ -74,7 +82,12 @@ async function resolveUser(db: Db, metadata: Record<string, unknown> | null | un
 }
 
 async function revokeForPayment(db: Db, paymentId: string, ref: string) {
-  // The ledger knows exactly what that payment granted.
-  const grant = await db.creditEntry.findUnique({ where: { paymentRef: `pay:${paymentId}` } });
-  return grant ? revokeCredits(db, grant.userId, grant.delta, `revoke:${paymentId}`, ref) : 0;
+  // The ledger knows exactly what that payment granted: credits, reel credits, or both.
+  let revoked = 0;
+  for (const balance of ["credits", "reels"] as const) {
+    const tail = balance === "reels" ? ":reels" : "";
+    const grant = await db.creditEntry.findUnique({ where: { paymentRef: `pay:${paymentId}${tail}` } });
+    if (grant) revoked += await revokeCredits(db, grant.userId, grant.delta, `revoke:${paymentId}`, `${ref}${tail}`, balance);
+  }
+  return revoked;
 }

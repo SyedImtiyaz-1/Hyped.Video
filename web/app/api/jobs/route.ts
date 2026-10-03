@@ -78,7 +78,7 @@ export async function POST(req: Request) {
   const active = await db.job.count({ where: { userId: user.id, status: { in: ["QUEUED", "RUNNING"] } } });
   if (active >= 3) return NextResponse.json({ error: "You already have 3 videos in progress" }, { status: 429 });
 
-  const paid = await db.creditEntry.count({ where: { userId: user.id, delta: { gt: 0 }, NOT: { reason: "signup_trial" } } });
+  const paid = await db.creditEntry.count({ where: { userId: user.id, reason: { startsWith: "purchase:" } } });
   const cost = creditsFor("newVideo", body.durationSec, body.quality);
   const job = await db.job.create({
     data: {

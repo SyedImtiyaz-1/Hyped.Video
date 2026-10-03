@@ -9,6 +9,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <AppShell
       credits={user.credits}
+      reelCredits={user.reelCredits}
       email={user.email ?? ""}
       isAdmin={isAdmin(user.id)}
       demo={isDemo}

@@ -11,6 +11,7 @@ model User {
   id               String        @id // Clerk user id
   email            String?
   credits          Int           @default(1) // free trial video
+  reelCredits      Int           @default(0) // from reel packs (REEL_PACKS): they only make reels
   plan             Plan          @default(FREE)
   billingCustomerId     String?  @unique // Dodo Payments customer_id
   billingSubscriptionId String?  // Dodo Payments subscription_id of the active plan
@@ -54,6 +55,7 @@ model Job {
   notes        String?    // free-text direction from the customer
   parentJobId  String?    // set for revisions ("re-roll the outro")
   creditsCost  Int
+  paidWith     String     @default("credits") // the balance that paid: credits | reels (a refund goes back there)
   watermark    Boolean    @default(false)
   privateRepo  Boolean    @default(false) // GitHub source fetched with the customer's saved token
   videoType    String     @default("launch") // launch | demo | feature
@@ -97,6 +99,7 @@ model CreditEntry {
   user      User     @relation(fields: [userId], references: [id])
   delta     Int      // +grant / -spend / +refund
   reason    String   // "subscription:pro", "pack_1", "job:<id>", "refund:<id>"
+  balance   String   @default("credits") // the balance it moved: credits | reels
   paymentRef String? @unique // idempotency key from the payment provider (payment, subscription period, refund, dispute)
   createdAt DateTime @default(now())
 }

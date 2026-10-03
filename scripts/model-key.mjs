@@ -67,6 +67,14 @@ text = line.test(text) ? text.replace(line, () => `${provider.name}=${key}`) : `
 writeFileSync(file, text, { mode: 0o600 });
 console.log("✓ Saved in .env.");
 
+// The local render Worker (`wrangler dev`) reads its own copy in render/.dev.vars: keep it in step, if there is one.
+const devVars = new URL("../render/.dev.vars", import.meta.url);
+if (existsSync(devVars)) {
+  const vars = readFileSync(devVars, "utf8");
+  writeFileSync(devVars, line.test(vars) ? vars.replace(line, () => `${provider.name}=${key}`) : `${vars.replace(/\n?$/, "\n")}${provider.name}=${key}\n`, { mode: 0o600 });
+  console.log("✓ Saved in render/.dev.vars for local renders.");
+}
+
 // Production: straight to Wrangler over stdin.
 const put = spawnSync("npx", ["wrangler", "secret", "put", provider.name], { cwd: new URL("../render/", import.meta.url), input: key, encoding: "utf8" });
 if (put.status !== 0) {

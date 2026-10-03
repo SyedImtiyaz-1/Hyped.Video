@@ -17,6 +17,7 @@ export const demoUser = (): User => ({
   id: DEMO_USER_ID,
   email: "you@example.com",
   credits: 13, // the demo ledger: 5 trial + 3 + 12 bought + 1 refunded − 8 used
+  reelCredits: 0,
   plan: "FREE",
   billingCustomerId: "cus_demo",
   billingSubscriptionId: null,
@@ -26,7 +27,7 @@ export const demoUser = (): User => ({
 function job(fields: Partial<Job> & Pick<Job, "id" | "status" | "sourceType" | "sourceUrl" | "createdAt">): Job {
   return {
     userId: DEMO_USER_ID, tone: null, format: "landscape", durationSec: 20, notes: null, parentJobId: null,
-    creditsCost: 1, watermark: false, privateRepo: false, videoType: "launch", music: "upbeat", brief: null, quality: "standard", voice: null, captions: true, template: null, kind: "video", reel: null, captionsUrl: null, videoUrl: null, posterUrl: null, shareCopy: null, plan: null, error: null,
+    creditsCost: 1, paidWith: "credits", watermark: false, privateRepo: false, videoType: "launch", music: "upbeat", brief: null, quality: "standard", voice: null, captions: true, template: null, kind: "video", reel: null, captionsUrl: null, videoUrl: null, posterUrl: null, shareCopy: null, plan: null, error: null,
     model: "claude-opus-5-5", numTurns: null, inputTokens: null, outputTokens: null, cacheReadTokens: null,
     cacheWriteTokens: null, llmCostUsd: null, computeSeconds: null, attempts: 1, startedAt: null, finishedAt: null,
     ...fields,
@@ -89,7 +90,7 @@ export const demoJobs = (): Job[] => [
 ];
 
 const entry = (id: string, delta: number, reason: string, minutesAgo: number): CreditEntry => ({
-  id, userId: DEMO_USER_ID, delta, reason, paymentRef: null, createdAt: ago(minutesAgo),
+  id, userId: DEMO_USER_ID, delta, reason, paymentRef: null, balance: "credits", createdAt: ago(minutesAgo),
 });
 
 // Sums to demoUser.credits (11).
