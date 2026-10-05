@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { creditsForReel, grantCredits, parseLookChanges, REEL_FONTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelFont, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
+import { creditsForReel, grantCredits, parseLookChanges, REEL_CLEANUPS, REEL_EDIT_STYLES, REEL_FONTS, REEL_STRENGTHS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelCleanup, type ReelEditStyle, type ReelFont, type ReelStrength, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
 import { getDb, startRender } from "@/lib/db";
 import { isDemo } from "@/lib/demo";
 import { looksLikeVideo, ownsUploadKey, uploadStore } from "@/lib/reel-uploads";
@@ -33,6 +33,11 @@ const Body = z.object({
   sfx: z.boolean().default(true),
   hook: z.boolean().default(true),
   language: z.enum(REEL_LANGUAGES as [ReelLanguage, ...ReelLanguage[]]).default("auto"),
+  // How much dead air the first render cuts; every cut can be put back in the editor.
+  cleanup: z.enum(REEL_CLEANUPS as [ReelCleanup, ...ReelCleanup[]]).default("pauses"),
+  // The edit style the reel starts from (its grade, music and cut effects), and how much happens.
+  editStyle: z.enum(REEL_EDIT_STYLES as [ReelEditStyle, ...ReelEditStyle[]]).default("creator"),
+  strength: z.enum(REEL_STRENGTHS as [ReelStrength, ...ReelStrength[]]).default("medium"),
   // Dodo Payments' policy for AI content tools, and the people in the video: the customer confirms they may use it.
   ownershipConfirmed: z.literal(true),
 });
@@ -49,7 +54,7 @@ export async function POST(req: Request) {
   const body = parsed.data;
   if (!ownsUploadKey(user.id, body.key)) return NextResponse.json({ error: "Upload not found" }, { status: 404 });
   const cost = creditsForReel(body.durationSec);
-  if (cost === null) return NextResponse.json({ error: `Reels can be up to ${REEL_MAX_SECONDS / 60} minutes long.` }, { status: 400 });
+  if (cost === null) return NextResponse.json({ error: `Videos can be up to ${REEL_MAX_SECONDS / 60} minutes long.` }, { status: 400 });
 
   const db = await getDb();
   // A double submit finds the reel already started for this upload.
@@ -76,6 +81,9 @@ export async function POST(req: Request) {
     sfx: body.sfx,
     hook: body.hook,
     language: body.language,
+    cleanup: body.cleanup,
+    editStyle: body.editStyle,
+    strength: body.strength,
     key: body.key,
     fileName: body.fileName,
     bytes: upload.size,

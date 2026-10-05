@@ -12,7 +12,7 @@
 // Reels (job.kind "reel") take the same route with no agent: the customer's upload goes from R2 into the container,
 // where runner/src/reel.ts captions and edits it in a few minutes.
 import { getSandbox, Sandbox } from "@cloudflare/sandbox";
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { WorkerEntrypoint, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import { sendFailureAlert, sendJobEmail } from "./email";
 import {
@@ -25,6 +25,8 @@ import {
   parseSealedToken,
   redactSecrets,
   REEL_PLAN_MODEL,
+  CHAT_SCHEMA,
+  CHAT_SYSTEM,
   REEL_UPLOAD_TYPES,
   reelSecondsFor,
   type Engine,
@@ -119,7 +121,9 @@ const STALE_RUNNING_MINUTES = 210; // longer than two long attempts, so the cron
 const MAX_REPO_BYTES = 500 * 1024 * 1024; // private repo downloads
 // Reels take 1-3 minutes, so they're checked more often and stopped sooner.
 const REEL_POLL_EVERY = "20 seconds";
-const REEL_MAX_POLLS = 75; // ~25 minutes
+const REEL_MAX_POLLS = 75; // ~25 minutes, for reels up to 3 minutes
+/** Polls for a reel of this length: ~25 minutes, plus ~4 minutes per minute of video (up to 20 minutes: ~105 minutes). */
+const reelPolls = (durationSec: number) => REEL_MAX_POLLS + Math.ceil(Math.max(0, durationSec - 180) / 60) * 12;
 
 /** Passes a stream through, failing it once more than `max` bytes have gone by. */
 function limitBytes(max: number) {
@@ -398,7 +402,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         const spec: ReelSpec = {
           jobId,
           input,
-          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language },
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
           // The container measures the real length: longer than the credits cover fails, and is refunded.
           maxSeconds: reelSecondsFor(job.creditsCost) + 1,
           watermark: job.watermark,
@@ -422,7 +426,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         });
       });
 
-      for (let i = 0; i < REEL_MAX_POLLS && !finished; i++) {
+      for (let i = 0; i < reelPolls(reel?.durationSec ?? 0) && !finished; i++) {
         await step.sleep(`wait reel ${i}`, REEL_POLL_EVERY);
         finished = await step.do(`check reel ${i}`, async () => {
           const proc = await sandboxFor(this.env, jobId).getProcess(processId);
@@ -542,7 +546,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         const spec: ReelSpec = {
           jobId,
           input,
-          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language },
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
           maxSeconds: reelSecondsFor(job.creditsCost) + 1,
           watermark: job.watermark,
           watermarkText: `Made with ${this.env.BRAND_NAME}`,
@@ -558,7 +562,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         });
       });
 
-      for (let i = 0; i < REEL_MAX_POLLS && !finished; i++) {
+      for (let i = 0; i < reelPolls(parseReel(job.reel)?.durationSec ?? 0) && !finished; i++) {
         await step.sleep(`wait export ${i}`, REEL_POLL_EVERY);
         finished = await step.do(`check export ${i}`, async () => {
           const proc = await sandboxFor(this.env, sandboxId).getProcess(processId);
@@ -727,9 +731,58 @@ async function devFiles(request: Request, env: Env, key: string): Promise<Respon
   return serveFile(request, env, key);
 }
 
+/** What a chat edit sends: the reel as the LLM reads it (chatContext) and the customer's message. */
+type ReelChatInput = { context: string; message: string };
+/** What comes back, unchecked: the web app checks the changes against the reel (parseChatOps) before using them. */
+type ReelChatResult = { reply: string; ops: unknown[]; inputTokens: number; outputTokens: number };
+
+/** One chat edit: the reel and the message to the plan's small model, with this Worker's key (the web app has none). */
+async function reelChat(env: Env, input: ReelChatInput): Promise<ReelChatResult> {
+  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set on the render Worker");
+  const context = String(input.context ?? "").slice(0, 60_000);
+  const message = String(input.message ?? "").slice(0, 1000);
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: REEL_PLAN_MODEL,
+      reasoning_effort: "low",
+      messages: [
+        { role: "system", content: CHAT_SYSTEM },
+        { role: "user", content: `${context}\n\nThe creator asks: ${message}` },
+      ],
+      response_format: { type: "json_schema", json_schema: { name: "reel_chat", strict: true, schema: CHAT_SCHEMA } },
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) throw new Error(`The assistant failed (${res.status}): ${redactSecrets((await res.text()).slice(0, 200))}`);
+  const body = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+  const parsed = JSON.parse(body.choices?.[0]?.message?.content ?? "{}") as { reply?: unknown; ops?: unknown };
+  return { reply: String(parsed.reply ?? "").slice(0, 600), ops: Array.isArray(parsed.ops) ? parsed.ops : [], inputTokens: body.usage?.prompt_tokens ?? 0, outputTokens: body.usage?.completion_tokens ?? 0 };
+}
+
+/**
+ * The reel editor's chat edits, for the web app (its REEL_ASSISTANT service binding to this entrypoint). RPC only: no
+ * URL reaches it, so only the web Worker can ask, after it has checked who's asking.
+ */
+export class ReelAssistant extends WorkerEntrypoint<Env> {
+  async chat(input: ReelChatInput): Promise<ReelChatResult> {
+    return reelChat(this.env, input);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // Local development only, like /dev/start: the web app's `next dev` asks for chat edits here.
+    if (request.method === "POST" && url.pathname === "/dev/reel-chat") {
+      if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+      try {
+        return Response.json(await reelChat(env, (await request.json()) as ReelChatInput));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
+      }
+    }
     if (url.pathname.startsWith("/dev/files/")) return devFiles(request, env, decodeURIComponent(url.pathname.slice("/dev/files/".length)));
     if (request.method === "GET" && url.pathname.startsWith("/media/")) return serveMedia(request, env, decodeURIComponent(url.pathname.slice(7)));
     if (request.method === "GET" && url.pathname.startsWith("/jobs/")) return serveMedia(request, env, decodeURIComponent(url.pathname.slice(1)));

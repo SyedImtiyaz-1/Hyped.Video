@@ -7,6 +7,9 @@ import { EFFECTS, isReelEffect, type PlacedEffect } from "./effects";
 import { customerError } from "./engines";
 import { parsePicture, type ReelPicture } from "./picture";
 import { isReelSound, type ReelSound } from "./sounds";
+import { isEditStyle, isStrength, type ReelEditStyle, type ReelStrength } from "./edit-styles";
+import { parseAudio, type ReelAudio } from "./music-beds";
+import { parseTrims, REEL_CLEANUPS, type ReelCleanup, type Trim } from "./trims";
 
 // The caption styles and what customers can change about them live in captions.ts.
 export { REEL_STYLES, type ReelStyle } from "./captions";
@@ -27,9 +30,14 @@ export type ReelFont = "classic" | "impact" | "editorial" | "elegant" | "script"
 export const REEL_FONTS: readonly ReelFont[] = ["classic", "impact", "editorial", "elegant", "script", "marker", "outline", "pop"];
 export const REEL_MAX_FONTS = 4;
 
-/** What the customer picks: a caption style and their changes to it ("look"), and for "behind" the big words' fonts. */
-export type ReelOptions = { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage };
-export const REEL_DEFAULTS: ReelOptions = { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto" };
+/**
+ * What the customer picks: an edit style (edit-styles.ts) and its strength, the caption style and their changes to it
+ * ("look"), for "behind" the big words' fonts, the extras, and how much dead air the first render cuts (cleanup; every
+ * cut can be put back in the editor). The edit style sets the rest as a starting point; the first render also takes
+ * its picture grade, music bed and cut effects from it.
+ */
+export type ReelOptions = { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage; cleanup: ReelCleanup; editStyle: ReelEditStyle; strength: ReelStrength };
+export const REEL_DEFAULTS: ReelOptions = { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto", cleanup: "pauses", editStyle: "creator", strength: "medium" };
 
 /** Font styles read back defensively: known ones, each once, at most REEL_MAX_FONTS, else Classic. */
 export function parseFonts(value: unknown): ReelFont[] {
@@ -75,7 +83,10 @@ export type EmojiStyle = { size: EmojiSize; place: EmojiPlace };
  * - the highlighted words ("Behind you": a line's first is its big word), the emojis and punch-ins, each on a word
  * - sound effects, transitions and effects, each at a second (a cut, or a word as it's said)
  * - the picture's look, the hook title and its sound, and where the upload cuts from shot to shot
- * Marks on words survive a change in how words are grouped into lines.
+ * - the stretches cut out (trims: pauses, filler sounds, retakes, the customer's own cuts)
+ * - the sound: the voice's background noise cleaned out, and a music bed
+ * Everything is on the upload's clock; onCutTimeline() (trims.ts) moves it onto the cut video's. Marks on words
+ * survive a change in how words are grouped into lines.
  */
 export type ReelEdit = {
   version: 1;
@@ -96,6 +107,8 @@ export type ReelEdit = {
   picture: ReelPicture;
   cuts: number[];
   hook: string;
+  trims: Trim[];
+  audio: ReelAudio;
 };
 
 // What the caption fonts can draw (as the runner checks): Latin, Greek and Cyrillic letters, digits and punctuation.
@@ -181,6 +194,8 @@ export function parseReelEdit(value: unknown, original?: ReelEdit): ReelEdit | n
     picture: parsePicture(v.picture),
     cuts: [...new Set(cuts)].sort((a, b) => a - b),
     hook: typeof v.hook === "string" ? v.hook.replace(/[\p{Extended_Pictographic}"“”]/gu, "").replace(/\s+/g, " ").trim().slice(0, 48) : "",
+    trims: parseTrims(v.trims, duration),
+    audio: parseAudio(v.audio),
   };
 }
 
@@ -194,28 +209,27 @@ function parseExport(value: unknown): ReelExport | undefined {
 // Uploads go from the browser straight to R2 through the web Worker, in parts. R2 wants every part but the last the
 // same size and at least 5 MiB. Next.js cuts request bodies off at 10 MB when middleware runs (Clerk's does, on
 // every API route: middlewareClientMaxBodySize), so a part is 8 MiB, well under that and the Worker's 100 MB.
-export const REEL_MAX_SECONDS = 180;
-export const REEL_MAX_BYTES = 500 * 1024 * 1024;
+export const REEL_MAX_SECONDS = 20 * 60;
+export const REEL_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 export const REEL_PART_BYTES = 8 * 1024 * 1024;
 /** Accepted uploads, and the extension each is stored with. */
 export const REEL_UPLOAD_TYPES = { "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm" } as const;
 export type ReelUploadType = keyof typeof REEL_UPLOAD_TYPES;
 
-// 1 credit up to 90 seconds, 2 up to 3 minutes. Our cost is about $0.03–0.10 a reel: speech recognition, one small
-// LLM call and a few minutes of container time.
-const REEL_TIERS = [
-  { seconds: 90, credits: 1 },
-  { seconds: REEL_MAX_SECONDS, credits: 2 },
-];
+// Priced by length: 1 credit per started 90 seconds of upload (so 1 up to 90 seconds and 2 up to 3 minutes, as before;
+// 14 for 20 minutes). Our cost is about $0.03–0.10 per 90 seconds: speech recognition, a few small LLM calls (the plan,
+// retakes) and container time for the cut and the render.
+export const REEL_SECONDS_PER_CREDIT = 90;
 
 /** Credits for a reel of this length, or null when it's longer than we take. */
 export function creditsForReel(durationSec: number): number | null {
-  return REEL_TIERS.find((t) => durationSec <= t.seconds)?.credits ?? null;
+  if (!(durationSec > 0) || durationSec > REEL_MAX_SECONDS) return null;
+  return Math.max(1, Math.ceil(durationSec / REEL_SECONDS_PER_CREDIT));
 }
 
 /** The longest reel `credits` pay for. The container measures the real length and refuses anything longer (refunded). */
 export function reelSecondsFor(credits: number): number {
-  return [...REEL_TIERS].reverse().find((t) => credits >= t.credits)?.seconds ?? 0;
+  return Math.min(REEL_MAX_SECONDS, Math.max(0, Math.floor(credits)) * REEL_SECONDS_PER_CREDIT);
 }
 
 /** The edit plan's model: one small structured call per reel (a second one romanizes Hinglish). */
@@ -261,6 +275,10 @@ export function parseReel(value: unknown): ReelJob | null {
     sfx: flag(v.sfx, REEL_DEFAULTS.sfx),
     hook: flag(v.hook, REEL_DEFAULTS.hook),
     language: REEL_LANGUAGES.includes(v.language as ReelLanguage) ? (v.language as ReelLanguage) : REEL_DEFAULTS.language,
+    // Reels from before cleanup cut nothing.
+    cleanup: REEL_CLEANUPS.includes(v.cleanup as ReelCleanup) ? (v.cleanup as ReelCleanup) : "off",
+    editStyle: isEditStyle(v.editStyle) ? v.editStyle : REEL_DEFAULTS.editStyle,
+    strength: isStrength(v.strength) ? v.strength : REEL_DEFAULTS.strength,
   };
 }
 
@@ -269,7 +287,7 @@ export function parseReel(value: unknown): ReelJob | null {
  * failures with these phrases (runner/src/reel.ts).
  */
 export function reelError(error: string | null | undefined): string {
-  if (/^Too long/.test(error ?? "")) return "This video is longer than the credits spent on it cover (1 credit up to 90 seconds, 2 up to 3 minutes).";
+  if (/^Too long/.test(error ?? "")) return `This video is longer than the credits spent on it cover (1 credit per ${REEL_SECONDS_PER_CREDIT} seconds of video).`;
   if (/^Not a video/.test(error ?? "")) return "We couldn't read that file as a video. Export it as an MP4, MOV or WebM and upload it again.";
   if (/^No speech/.test(error ?? "")) return "We couldn't hear anyone speaking in this video, so there was nothing to caption.";
   if (/^Unsupported language/.test(error ?? "")) return "Captions work for English and Hinglish for now. Choose one of those, or try another video.";

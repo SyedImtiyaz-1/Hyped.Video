@@ -7,11 +7,13 @@ const isProtected = createRouteMatcher(["/dashboard(.*)", "/api/jobs(.*)", "/api
 // Demo mode (development only) skips auth entirely; see lib/demo.ts.
 const demo = process.env.DEMO_MODE === "true" && process.env.NODE_ENV !== "production";
 
-// Someone starting their first video is almost always new: sign-up, not sign-in, then back to the same page.
+// Someone starting their first video is almost always new: sign-up, not sign-in, then back to the same page. That's the
+// quick start, and the reel form when it opens with a clip picked on the homepage (?pending).
 const isStart = createRouteMatcher(["/dashboard/start(.*)"]);
+const isPendingClip = (req: NextRequest) => req.nextUrl.pathname === "/dashboard/reels" && req.nextUrl.searchParams.has("pending");
 
 const clerk = clerkMiddleware(async (auth, req) => {
-  if (isStart(req) && !(await auth()).userId) {
+  if ((isStart(req) || isPendingClip(req)) && !(await auth()).userId) {
     const signUp = new URL("/sign-up", req.url);
     signUp.searchParams.set("redirect_url", req.url);
     return NextResponse.redirect(signUp);

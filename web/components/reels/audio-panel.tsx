@@ -1,8 +1,11 @@
 "use client";
-import { Crosshair, Plus, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { Crosshair, Music, Play, Plus, Square, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { REEL_MUSIC, REEL_MUSIC_IDS, type ReelAudio, type ReelMusic } from "@launchreel/core/music-beds";
 import { REEL_SOUNDS, type ReelSound } from "@launchreel/core/sounds";
 import { Popover } from "@/components/ui/popover";
+import { cn } from "@/lib/cn";
+import { previewMusic } from "./sfx-player";
 import { SoundLabel, SoundPicker } from "./sound-picker";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
@@ -14,10 +17,18 @@ export type SoundActions = {
   setHookSound: (sound: ReelSound | null) => void;
   setOn: (on: boolean) => void;
   seek: (t: number) => void;
+  /** Background noise taken out of the voice, or not. */
+  setClean: (clean: boolean) => void;
+  /** A music bed (or none), and its volume (0-1). */
+  setMusic: (track: ReelMusic | null) => void;
+  setMusicVolume: (volume: number) => void;
 };
 
-/** Sound effects: on or off, the hook's, and every one in the reel at its second, each changeable, movable and removable. */
-export function AudioPanel({ sounds, hookSound, hookOn, on, time, actions }: { sounds: { at: number; sound: ReelSound }[]; hookSound: ReelSound | null; hookOn: boolean; on: boolean; time: number; actions: SoundActions }) {
+/**
+ * The reel's sound: the voice cleaned of background noise or not, a music bed under it (ducked while it speaks), and the
+ * sound effects: on or off, the hook's, and every one in the reel at its second, each changeable, movable and removable.
+ */
+export function AudioPanel({ sounds, hookSound, hookOn, on, time, audio, actions }: { sounds: { at: number; sound: ReelSound }[]; hookSound: ReelSound | null; hookOn: boolean; on: boolean; time: number; audio: ReelAudio; actions: SoundActions }) {
   // Which picker is open: a row's, the hook's, or the new sound's; and the button it hangs from.
   const [open, setOpen] = useState<number | "hook" | "new" | null>(null);
   const anchor = useRef<HTMLElement | null>(null);
@@ -26,8 +37,57 @@ export function AudioPanel({ sounds, hookSound, hookOn, on, time, actions }: { s
     setOpen(which);
   };
   const value = open === "hook" ? hookSound : typeof open === "number" ? (sounds[open]?.sound ?? null) : null;
+  // The track being previewed from the list (it plays its first seconds), stopped when the panel closes.
+  const [hearing, setHearing] = useState<ReelMusic | null>(null);
+  useEffect(() => () => void previewMusic(null), []);
+  const hear = (track: ReelMusic) => {
+    const next = hearing === track ? null : track;
+    setHearing(next);
+    void previewMusic(next);
+  };
   return (
     <div className="space-y-4">
+      <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-alpha-400 p-3 text-sm">
+        <input type="checkbox" checked={audio.clean} onChange={(e) => actions.setClean(e.target.checked)} className="mt-0.5 size-4 accent-[var(--ds-gray-1000)]" />
+        <span>
+          <span className="block font-medium text-gray-1000">Clean up background noise</span>
+          <span className="mt-0.5 block text-xs text-gray-900">Takes hum, hiss and room noise out of your voice. Heard in the export.</span>
+        </span>
+      </label>
+
+      <div>
+        <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-gray-1000">
+          <Music className="size-3.5" />
+          Music
+        </p>
+        <div className="grid gap-1.5 sm:grid-cols-2" role="radiogroup" aria-label="Music">
+          {[null, ...REEL_MUSIC_IDS].map((track) => {
+            const picked = (audio.music?.track ?? null) === track;
+            return (
+              <div key={track ?? "none"} className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors", picked ? "border-gray-1000 bg-gray-alpha-100" : "border-gray-alpha-400 hover:bg-gray-alpha-100")}>
+                <button type="button" role="radio" aria-checked={picked} onClick={() => actions.setMusic(track)} className="min-w-0 flex-1 text-left">
+                  <span className="block text-[13px] font-medium text-gray-1000">{track ? REEL_MUSIC[track].label : "No music"}</span>
+                  <span className="block truncate text-xs text-gray-900">{track ? `${REEL_MUSIC[track].mood} · ${REEL_MUSIC[track].bpm} BPM` : "Just your voice and the sound effects"}</span>
+                </button>
+                {track && (
+                  <button type="button" onClick={() => hear(track)} aria-label={hearing === track ? `Stop the ${REEL_MUSIC[track].label} preview` : `Hear ${REEL_MUSIC[track].label}`} className="flex size-8 shrink-0 items-center justify-center rounded-full border border-gray-alpha-400 text-gray-1000 hover:bg-gray-alpha-200">
+                    {hearing === track ? <Square className="size-3 fill-current" /> : <Play className="ml-0.5 size-3.5 fill-current" />}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {audio.music && (
+          <label className="mt-3 flex items-center gap-3 text-[13px] text-gray-1000">
+            <span className="w-14 shrink-0">Volume</span>
+            <input type="range" min={0} max={1} step={0.05} value={audio.music.volume} onChange={(e) => actions.setMusicVolume(Number(e.target.value))} className="h-1 min-w-0 flex-1 accent-[var(--ds-gray-1000)]" aria-label="Music volume" />
+            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-gray-900">{Math.round(audio.music.volume * 100)}%</span>
+          </label>
+        )}
+        <p className="mt-2 text-xs text-gray-900">Laid under your voice and dipped while you speak, as in the preview. Music by Sascha Ende (ende.app).</p>
+      </div>
+
       <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-alpha-400 p-3 text-sm">
         <input type="checkbox" checked={on} onChange={(e) => actions.setOn(e.target.checked)} className="mt-0.5 size-4 accent-[var(--ds-gray-1000)]" />
         <span>

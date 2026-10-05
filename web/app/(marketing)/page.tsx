@@ -11,7 +11,7 @@ import { money } from "@/lib/format";
 import { visitorCurrency } from "@/lib/region";
 import { HERO, SHOWCASE, posterSrc, videoSrc } from "@/lib/showcase";
 import { studioAvailable } from "@/lib/studio";
-import { StartForm } from "@/components/start-form";
+import { HeroCreate } from "@/components/hero-create";
 
 const STEPS = [
   { icon: Link2, title: "Paste a URL or repo", body: "Your website, or a GitHub repo, public or private. We read your real copy, colors, fonts and UI." },
@@ -82,7 +82,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
           <p className="mx-auto mt-6 max-w-2xl text-lg text-gray-900 md:text-xl">
             Paste your website or GitHub repo. In about 15 minutes you get a polished launch video with music, motion, an optional AI voiceover and share copy, built from your actual UI instead of stock footage.
           </p>
-          <StartForm className="mt-8" />
+          <HeroCreate className="mt-8" />
           <p className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[13px] text-gray-900">
             <span>5 free credits. No card required.</span>
             <a href="/templates" className="underline-offset-2 hover:text-gray-1000 hover:underline">

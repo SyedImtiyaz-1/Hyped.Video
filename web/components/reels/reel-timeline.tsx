@@ -8,15 +8,17 @@ import { REEL_SOUNDS } from "@launchreel/core/sounds";
 import { emojiShows, type ZoomWindow } from "@launchreel/core/timeline";
 import { cn } from "@/lib/cn";
 
-export type TimelineItem = { kind: "line"; word: number } | { kind: "effect"; index: number } | { kind: "zoom"; word: number } | { kind: "emoji"; word: number } | { kind: "sound"; index: number };
+export type TimelineItem = { kind: "line"; word: number } | { kind: "effect"; index: number } | { kind: "zoom"; word: number } | { kind: "emoji"; word: number } | { kind: "sound"; index: number } | { kind: "trim"; index: number };
+
+const TRIM_NAME = { pause: "Pause", filler: "Filler", retake: "Retake", cut: "Cut" } as const;
 
 const LABEL = 64;
 const ZOOMS = [1, 2, 4, 8];
 
 /**
- * The reel along time, CapCut-style: a track each for the captions, the effects and punch-ins, the emojis and the
- * sounds, the cuts marked across them, and the playhead. Click or drag anywhere to move the playhead; click a piece to
- * go to it and edit it.
+ * The reel along time, CapCut-style, on the recording's clock: a track for what's cut (hatched across every track),
+ * a track each for the captions, the effects and punch-ins, the emojis and the sounds, the shot changes marked across
+ * them, and the playhead. Click or drag anywhere to move the playhead; click a piece to go to it and edit it.
  */
 export function ReelTimeline({ edit, lines, windows, time, duration, showEmojis, showZooms, showSounds, onSeek, onPick }: { edit: ReelEdit; lines: CaptionLine[]; windows: ZoomWindow[]; time: number; duration: number; showEmojis: boolean; showZooms: boolean; showSounds: boolean; onSeek: (t: number) => void; onPick: (item: TimelineItem) => void }) {
   const box = useRef<HTMLDivElement>(null);
@@ -80,6 +82,16 @@ export function ReelTimeline({ edit, lines, windows, time, duration, showEmojis,
   );
   const shows = showEmojis ? emojiShows(edit, lines) : [];
   const tracks: { name: string; items: React.ReactNode[] }[] = [
+    ...(edit.trims.length
+      ? [
+          {
+            name: "Cuts",
+            items: edit.trims.map((t, i) =>
+              piece({ kind: "trim", index: i }, x(t.start), x(t.end) - x(t.start), "bg-red-300 text-red-1000 hover:bg-red-400", `${TRIM_NAME[t.reason]} cut, ${(t.end - t.start).toFixed(1)} s at ${t.start.toFixed(1)} s`, TRIM_NAME[t.reason]),
+            ),
+          },
+        ]
+      : []),
     {
       name: "Captions",
       items: lines.map((l, li) => piece({ kind: "line", word: l.words[0].i }, x(l.start), x(l.end) - x(l.start) - 1, "bg-gray-alpha-300 text-gray-1000 hover:bg-gray-alpha-400", l.text, l.text, 4 + (li % 2) * 0)),
@@ -145,7 +157,15 @@ export function ReelTimeline({ edit, lines, windows, time, duration, showEmojis,
               </div>
             </div>
           ))}
-          {/* Cuts and the playhead, across every track. */}
+          {/* What's cut, hatched across every track; shot changes and the playhead. */}
+          {edit.trims.map((t) => (
+            <span
+              key={`trim-${t.start}`}
+              className="pointer-events-none absolute bottom-0 top-6 z-[5] bg-[repeating-linear-gradient(135deg,rgb(229_72_77/0.16)_0_4px,transparent_4px_8px)]"
+              style={{ left: LABEL + x(t.start), width: Math.max(2, x(t.end) - x(t.start)) }}
+              aria-hidden
+            />
+          ))}
           {edit.cuts.map((c) => (
             <span key={c} className="pointer-events-none absolute bottom-0 top-6 z-10 border-l border-dashed border-amber-700" style={{ left: LABEL + x(c) }} title={`Cut at ${c.toFixed(1)} s`} />
           ))}

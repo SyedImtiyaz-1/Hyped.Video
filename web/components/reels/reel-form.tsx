@@ -3,7 +3,10 @@ import { ArrowRight, Film, LoaderCircle, Upload, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { creditsForReel, REEL_DEFAULTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_SECONDS, REEL_UPLOAD_TYPES, type ReelLanguage, type ReelOptions, type ReelUploadType } from "@launchreel/core/reel";
+import { creditsForReel, REEL_DEFAULTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_SECONDS, REEL_SECONDS_PER_CREDIT, REEL_UPLOAD_TYPES, type ReelLanguage, type ReelOptions, type ReelUploadType } from "@launchreel/core/reel";
+import { REEL_CLEANUPS, type ReelCleanup } from "@launchreel/core/trims";
+import { EDIT_STYLES, isEditStyle } from "@launchreel/core/edit-styles";
+import { takePendingClip } from "@/lib/pending-clip";
 import { cn } from "@/lib/cn";
 import { plural } from "@/lib/format";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -12,6 +15,7 @@ import { Label } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { REEL_LANGUAGE_LABEL } from "./labels";
 import { measureVideo, type VideoInfo } from "./measure";
+import { EditStylePicker } from "./edit-style-picker";
 import { FontPicker } from "./font-picker";
 import { LookEditor } from "./look-editor";
 import { StylePicker } from "./style-picker";
@@ -23,6 +27,12 @@ const EXTRAS: { key: "emojis" | "zooms" | "sfx" | "hook"; label: string; hint: s
   { key: "sfx", label: "Sound effects", hint: "Soft hits under your voice. No music." },
   { key: "hook", label: "Hook title", hint: "A big title for the first 2.5 seconds" },
 ];
+
+const CLEANUP: Record<ReelCleanup, { label: string; hint: string }> = {
+  off: { label: "Off", hint: "Every second stays as you recorded it." },
+  pauses: { label: "Pauses", hint: "Long pauses are shortened to a natural beat." },
+  full: { label: "Pauses, fillers and retakes", hint: "Also cuts the ums, false starts and the takes you said again." },
+};
 
 const LANGUAGE_HINT: Record<ReelLanguage, string> = {
   auto: "We follow the language you speak in.",
@@ -41,12 +51,16 @@ function uploadType(file: File): ReelUploadType | null {
 }
 
 const minutes = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-const megabytes = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024 / 1024))} MB`;
+const megabytes = (bytes: number) => (bytes >= 1024 ** 3 ? `${Math.round((bytes / 1024 ** 3) * 10) / 10} GB` : `${Math.max(1, Math.round(bytes / 1024 / 1024))} MB`);
 const shape = (info: VideoInfo) => (!info.width || !info.height ? null : info.height > info.width * 1.15 ? "9:16" : info.width > info.height * 1.15 ? "16:9" : "1:1");
 
 type Picked = { file: File; type: ReelUploadType; info: VideoInfo; url: string };
 
-export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number; reelCredits?: number; trial: boolean }) {
+/**
+ * `pending`: opened from the homepage with a clip picked there (true: it's waiting in this browser; false: it couldn't be
+ * kept, so the form asks for it again). `startStyle`: the edit style picked with it.
+ */
+export function ReelForm({ credits, reelCredits = 0, trial, pending, startStyle }: { credits: number; reelCredits?: number; trial: boolean; pending?: boolean; startStyle?: string }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const upload = useRef<UploadJob | null>(null);
@@ -67,6 +81,15 @@ export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number;
   const enough = cost === null || fromReels || credits >= cost;
 
   useEffect(() => () => upload.current?.cancel(), []);
+  // A clip picked on the homepage: its edit style, and the file itself when it was kept through sign-up.
+  useEffect(() => {
+    if (pending === undefined) return;
+    if (isEditStyle(startStyle)) setOptions((o) => ({ ...o, ...EDIT_STYLES[startStyle].options, look: { ...EDIT_STYLES[startStyle].options.look }, fonts: [...EDIT_STYLES[startStyle].options.fonts], editStyle: startStyle }));
+    if (!pending) return setError({ message: "Choose your video again: this browser couldn't keep it while you signed up." });
+    void takePendingClip().then((clip) => (clip ? choose(clip.file) : setError({ message: "Choose your video again to start." })));
+    // Once, when the page opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => () => void (picked && URL.revokeObjectURL(picked.url)), [picked]);
 
   async function choose(file: File | undefined) {
@@ -78,7 +101,7 @@ export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number;
     setMeasuring(true);
     try {
       const info = await measureVideo(file);
-      if (info.duration > REEL_MAX_SECONDS) return setError({ message: `That video is ${minutes(info.duration)} long. Reels can be up to ${REEL_MAX_SECONDS / 60} minutes: trim it and upload it again.` });
+      if (info.duration > REEL_MAX_SECONDS) return setError({ message: `That video is ${minutes(info.duration)} long. Videos can be up to ${REEL_MAX_SECONDS / 60} minutes: trim it and upload it again.` });
       if (info.playable && (!info.width || !info.height)) return setError({ message: "That file has sound but no picture. Upload a video." });
       setPicked({ file, type, info, url: URL.createObjectURL(file) });
     } catch (err) {
@@ -133,7 +156,7 @@ export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number;
       <Card>
         <div className="border-b border-gray-alpha-400 px-5 py-4">
           <h2 className="text-lg font-semibold tracking-tight text-gray-1000">New reel</h2>
-          <p className="mt-0.5 text-sm text-gray-900">Upload a video you recorded, up to {REEL_MAX_SECONDS / 60} minutes. You get it back captioned, with zooms and sound.</p>
+          <p className="mt-0.5 text-sm text-gray-900">Upload a video you recorded, up to {REEL_MAX_SECONDS / 60} minutes. You get it back with the dead air cut, captioned, with zooms and sound.</p>
         </div>
 
         <CardContent className="space-y-6">
@@ -180,6 +203,35 @@ export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number;
               </span>
             </button>
           )}
+
+          <div>
+            <Label>Edit style</Label>
+            <EditStylePicker
+              value={options.editStyle}
+              strength={options.strength}
+              onChange={(editStyle) => setOptions((o) => ({ ...o, ...EDIT_STYLES[editStyle].options, look: { ...EDIT_STYLES[editStyle].options.look }, fonts: [...EDIT_STYLES[editStyle].options.fonts], editStyle }))}
+              onStrength={(strength) => setOptions((o) => ({ ...o, strength }))}
+            />
+          </div>
+
+          <div>
+            <Label>Clean up</Label>
+            <div className="flex w-full flex-col gap-0.5 rounded-md border border-gray-alpha-400 bg-background-100 p-1 sm:inline-flex sm:h-10 sm:w-auto sm:flex-row" role="radiogroup" aria-label="Clean up">
+              {REEL_CLEANUPS.map((cleanup) => (
+                <button
+                  key={cleanup}
+                  type="button"
+                  role="radio"
+                  aria-checked={options.cleanup === cleanup}
+                  onClick={() => setOptions((o) => ({ ...o, cleanup }))}
+                  className={cn("h-9 rounded px-3 text-left text-sm transition-colors sm:h-full sm:text-center", options.cleanup === cleanup ? "bg-gray-alpha-200 font-medium text-gray-1000" : "text-gray-900 hover:text-gray-1000")}
+                >
+                  {CLEANUP[cleanup].label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[13px] text-gray-900">{CLEANUP[options.cleanup].hint} You can put any cut back in the editor.</p>
+          </div>
 
           <div>
             <Label>Caption style</Label>
@@ -247,7 +299,7 @@ export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number;
             <input type="checkbox" checked={owner} onChange={(e) => setOwner(e.target.checked)} className="mt-0.5 size-4 shrink-0 accent-[var(--ds-gray-1000)]" />
             <span className="text-gray-1000">
               I own this video and have permission from everyone in it.
-              <span className="block text-[13px] text-gray-900">1 credit up to 90 seconds, 2 up to 3 minutes.{trial ? " Free-trial reels carry a small “Made with Hyped” mark." : ""}</span>
+              <span className="block text-[13px] text-gray-900">1 credit per {REEL_SECONDS_PER_CREDIT} seconds of video, priced before you start.{trial ? " Free-trial reels carry a small “Made with Hyped” mark." : ""}</span>
             </span>
           </label>
         </CardContent>
@@ -277,7 +329,7 @@ export function ReelForm({ credits, reelCredits = 0, trial }: { credits: number;
           )}
           <div className="flex items-center justify-between gap-3 px-5 py-4">
             <span className={cn("text-[13px] tabular-nums", enough ? "text-gray-900" : "text-amber-900")}>
-              {fromReels ? plural(cost, "reel credit") : cost ? plural(cost, "credit") : "1–2 credits"}
+              {fromReels ? plural(cost, "reel credit") : cost ? plural(cost, "credit") : `1 credit per ${REEL_SECONDS_PER_CREDIT} s`}
               <span className="hidden sm:inline"> · you have {fromReels || (cost === null && reelCredits > 0) ? plural(reelCredits, "reel credit") : credits}</span>
             </span>
             <div className="flex items-center gap-2">

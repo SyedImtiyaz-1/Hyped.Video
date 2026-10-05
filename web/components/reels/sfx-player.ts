@@ -1,6 +1,7 @@
 "use client";
 // The editor's sound effects: the same sounds the render mixes (packages/core/src/sounds.ts), from their AAC copies in
 // public/reels/sfx, at the same gains, so the preview sounds like the export. Web Audio, started on the first click.
+import { MUSIC_DUCK_DB, musicGainDb, musicPreviewUrl, type ReelAudio, type ReelMusic } from "@launchreel/core/music-beds";
 import { REEL_SOUNDS, soundPreviewUrl, type ReelSound } from "@launchreel/core/sounds";
 import type { SoundCue } from "@launchreel/core/timeline";
 
@@ -100,4 +101,87 @@ export class CuePlayer {
       });
     });
   }
+}
+
+/**
+ * The editor's music bed, in step with the video on the cut video's clock (so it plays straight on over a cut, as in the
+ * export): the chosen track looped from the reel's start, at the export's level, dipping MUSIC_DUCK_DB while the voice
+ * speaks (`speaking`), where the render's sidechain compressor dips it about as much. Give it the time every frame.
+ */
+export class MusicPlayer {
+  music: ReelAudio["music"] = null;
+  speaking: (time: number) => boolean = () => false;
+  private source: AudioBufferSourceNode | null = null;
+  private gain: GainNode | null = null;
+  private playingTrack: ReelMusic | null = null;
+  private last: number | null = null;
+  private starting = false;
+
+  tick(time: number, playing: boolean) {
+    const ctx = audio();
+    if (!ctx || !playing || !this.music) return this.reset();
+    const jumped = this.last === null || time < this.last || time - this.last > 0.5;
+    this.last = time;
+    if ((jumped || !this.source || this.playingTrack !== this.music.track) && !this.starting) void this.start(time);
+    const level = 10 ** (musicGainDb(this.music.volume) / 20) * (this.speaking(time) ? 10 ** (MUSIC_DUCK_DB / 20) : 1);
+    this.gain?.gain.setTargetAtTime(level, ctx.currentTime, 0.06);
+  }
+
+  /** Stops the music, so the next frame starts it fresh where the video is. */
+  reset() {
+    this.last = null;
+    if (this.source) {
+      try {
+        this.source.stop();
+      } catch {}
+      this.source.disconnect();
+    }
+    this.source = null;
+    this.playingTrack = null;
+  }
+
+  private async start(time: number) {
+    const music = this.music;
+    const ctx = audio();
+    if (!music || !ctx) return;
+    this.starting = true;
+    const buffer = await load(musicPreviewUrl(music.track));
+    this.starting = false;
+    if (!buffer || this.music?.track !== music.track) return;
+    this.reset();
+    this.last = time;
+    const source = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    source.buffer = buffer;
+    source.loop = true;
+    gain.gain.value = 10 ** (musicGainDb(music.volume) / 20);
+    source.connect(gain).connect(ctx.destination);
+    source.start(0, time % buffer.duration);
+    this.source = source;
+    this.gain = gain;
+    this.playingTrack = music.track;
+  }
+}
+
+/** Plays the first seconds of a music bed (the picker's previews); playing another stops it. */
+let previewing: AudioBufferSourceNode | null = null;
+export async function previewMusic(track: ReelMusic | null) {
+  if (previewing) {
+    try {
+      previewing.stop();
+    } catch {}
+    previewing.disconnect();
+    previewing = null;
+  }
+  const ctx = audio();
+  if (!track || !ctx) return;
+  const buffer = await load(musicPreviewUrl(track));
+  if (!buffer) return;
+  const source = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  source.buffer = buffer;
+  gain.gain.value = 0.5;
+  source.connect(gain).connect(ctx.destination);
+  source.start(0, 0, 12);
+  previewing = source;
 }

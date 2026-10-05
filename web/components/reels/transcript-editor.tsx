@@ -1,5 +1,5 @@
 "use client";
-import { CornerDownLeft, EyeOff, Smile, Sparkles, Star, Volume2, ZoomIn } from "lucide-react";
+import { CornerDownLeft, EyeOff, Scissors, Smile, Sparkles, Star, Volume2, ZoomIn } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cueOf, type CaptionLine, type ReelStyle } from "@launchreel/core/captions";
 import { EFFECTS, REEL_EFFECTS, type ReelEffect } from "@launchreel/core/effects";
@@ -30,6 +30,9 @@ export type WordActions = {
   setSound: (word: number, sound: ReelSound | null) => void;
   /** Adds an effect as the word is said. */
   addEffect: (word: number, effect: ReelEffect) => void;
+  /** Cuts words out of the video (picture and sound), and puts a cut word back (with the rest of its cut). */
+  cutWords: (words: number[]) => void;
+  restoreWord: (word: number) => void;
 };
 
 /** Every word in order, grouped by the caption line it's on; hidden words sit with the line before them. */
@@ -51,13 +54,13 @@ export const soundOfWord = (edit: ReelEdit, word: number) => edit.sounds.findInd
 /**
  * The reel's words as the captions show them, a line a row: click a word to jump there and change it, or anything on it.
  */
-export function TranscriptEditor({ edit, lines, time, style, selected, hookOn, onHookText, onHookOn, emojisOn, zoomsOn, sfxOn, actions }: { edit: ReelEdit; lines: CaptionLine[]; time: number; style: ReelStyle; selected: number | null; hookOn: boolean; onHookText: (text: string) => void; onHookOn: (on: boolean) => void; emojisOn: boolean; zoomsOn: boolean; sfxOn: boolean; actions: WordActions }) {
+export function TranscriptEditor({ edit, lines, time, style, selected, hookOn, onHookText, onHookOn, emojisOn, zoomsOn, sfxOn, cut, actions }: { edit: ReelEdit; lines: CaptionLine[]; time: number; style: ReelStyle; selected: number | null; hookOn: boolean; onHookText: (text: string) => void; onHookOn: (on: boolean) => void; emojisOn: boolean; zoomsOn: boolean; sfxOn: boolean; cut: Set<number>; actions: WordActions }) {
   const rows = transcriptRows(edit, lines);
   const playing = lines.findIndex((l) => time >= l.start && time < l.end);
   const keys = new Set(edit.keywords);
   const hidden = new Set(edit.hidden);
   const breaks = new Set(edit.breaks);
-  const fillers = edit.words.map((w, i) => i).filter((i) => FILLER.test(edit.words[i].text) && !hidden.has(i));
+  const fillers = edit.words.map((w, i) => i).filter((i) => FILLER.test(edit.words[i].text) && !cut.has(i));
   const keyName = style === "behind" ? "big word" : "highlight";
   return (
     <div className="space-y-4">
@@ -71,11 +74,11 @@ export function TranscriptEditor({ edit, lines, time, style, selected, hookOn, o
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[13px] text-gray-900">Click a word to fix it, hide it, start a line, or give it a {keyName}, emoji, zoom, sound or effect.</p>
+        <p className="text-[13px] text-gray-900">Click a word to fix it, cut it, hide it, start a line, or give it a {keyName}, emoji, zoom, sound or effect.</p>
         {fillers.length > 0 && (
-          <button type="button" onClick={() => actions.hideWords(fillers)} className="flex h-8 items-center gap-1.5 rounded-md border border-gray-alpha-400 px-2.5 text-[13px] text-gray-1000 hover:bg-gray-alpha-100">
-            <EyeOff className="size-3.5" />
-            Hide {fillers.length} filler {fillers.length === 1 ? "word" : "words"} (um, uh)
+          <button type="button" onClick={() => actions.cutWords(fillers)} className="flex h-8 items-center gap-1.5 rounded-md border border-gray-alpha-400 px-2.5 text-[13px] text-gray-1000 hover:bg-gray-alpha-100">
+            <Scissors className="size-3.5" />
+            Cut {fillers.length} filler {fillers.length === 1 ? "word" : "words"} (um, uh)
           </button>
         )}
       </div>
@@ -97,10 +100,10 @@ export function TranscriptEditor({ edit, lines, time, style, selected, hookOn, o
                       key={w}
                       type="button"
                       onClick={() => actions.select(w)}
-                      title={hidden.has(w) ? "Hidden from the captions" : keys.has(w) ? `The ${keyName}` : undefined}
+                      title={cut.has(w) ? "Cut from the video" : hidden.has(w) ? "Hidden from the captions" : keys.has(w) ? `The ${keyName}` : undefined}
                       className={cn(
                         "rounded px-1 transition-colors",
-                        hidden.has(w) ? "text-gray-900 line-through decoration-gray-900/60" : keys.has(w) ? "bg-brand/20 font-semibold text-gray-1000" : "text-gray-1000 hover:bg-gray-alpha-200",
+                        cut.has(w) ? "text-red-900 line-through decoration-red-900/70 opacity-70" : hidden.has(w) ? "text-gray-900 line-through decoration-gray-900/60" : keys.has(w) ? "bg-brand/20 font-semibold text-gray-1000" : "text-gray-1000 hover:bg-gray-alpha-200",
                         breaks.has(w) && "ml-2 border-l-2 border-gray-alpha-500 pl-1.5",
                         w === selected && "ring-2 ring-gray-1000",
                       )}
@@ -112,7 +115,7 @@ export function TranscriptEditor({ edit, lines, time, style, selected, hookOn, o
                   {zoom && zoomsOn && <ZoomIn className="size-3.5 text-gray-900" aria-label="Punch-in" />}
                 </div>
               </div>
-              {open && selected !== null && <WordPanel key={selected} word={selected} edit={edit} keyName={keyName} emojisOn={emojisOn && style !== "behind"} zoomsOn={zoomsOn} sfxOn={sfxOn} actions={actions} />}
+              {open && selected !== null && <WordPanel key={selected} word={selected} edit={edit} keyName={keyName} emojisOn={emojisOn && style !== "behind"} zoomsOn={zoomsOn} sfxOn={sfxOn} cut={cut.has(selected)} actions={actions} />}
             </div>
           );
         })}
@@ -122,7 +125,7 @@ export function TranscriptEditor({ edit, lines, time, style, selected, hookOn, o
 }
 
 /** The selected word's controls. */
-export function WordPanel({ word, edit, keyName, emojisOn, zoomsOn, sfxOn, actions, dark = false, focusText = false }: { word: number; edit: ReelEdit; keyName: string; emojisOn: boolean; zoomsOn: boolean; sfxOn: boolean; actions: WordActions; dark?: boolean; focusText?: boolean }) {
+export function WordPanel({ word, edit, keyName, emojisOn, zoomsOn, sfxOn, cut = false, actions, dark = false, focusText = false }: { word: number; edit: ReelEdit; keyName: string; emojisOn: boolean; zoomsOn: boolean; sfxOn: boolean; cut?: boolean; actions: WordActions; dark?: boolean; focusText?: boolean }) {
   const [text, setText] = useState(edit.words[word].text);
   useEffect(() => setText(edit.words[word].text), [edit.words, word]);
   const [open, setOpen] = useState<"emoji" | "sound" | "effect" | null>(null);
@@ -168,6 +171,10 @@ export function WordPanel({ word, edit, keyName, emojisOn, zoomsOn, sfxOn, actio
         </label>
       )}
       <div className="flex flex-wrap gap-1.5">
+        <button type="button" aria-pressed={cut} onClick={() => (cut ? actions.restoreWord(word) : actions.cutWords([word]))} className={chip(cut)} title={cut ? "Put this back in the video" : "Cut this word out of the video: picture and sound"}>
+          <Scissors className="size-3.5" />
+          {cut ? "Cut · put back" : "Cut"}
+        </button>
         <button type="button" aria-pressed={isKey} onClick={() => actions.toggleKeyword(word)} className={chip(isKey)}>
           <Star className="size-3.5" />
           {keyName === "big word" ? "Big word" : "Highlight"}

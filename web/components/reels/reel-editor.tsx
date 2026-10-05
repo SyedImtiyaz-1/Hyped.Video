@@ -8,9 +8,14 @@ import type { ReelPicture } from "@launchreel/core/picture";
 import type { EmojiStyle, ReelEdit, ReelExport, ReelFont, ZoomStrength } from "@launchreel/core/reel";
 import type { ReelSound } from "@launchreel/core/sounds";
 import { punchAt, soundCues, zoomAim, zoomWindows } from "@launchreel/core/timeline";
+import { cutClock, onCutTimeline, parseTrims, pauseTrims, trimAt, trimmedWords, wordsTrim, type Trim } from "@launchreel/core/trims";
+import { MUSIC_DEFAULT_VOLUME } from "@launchreel/core/music-beds";
+import { applyChatOps, type ChatOp } from "@launchreel/core/reel-chat";
 import { cn } from "@/lib/cn";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { AudioPanel, type SoundActions } from "./audio-panel";
+import { ChatPanel, type ChatMessage } from "./chat-panel";
+import { CutsPanel, type TrimActions } from "./cuts-panel";
 import { EffectsPanel, type EffectActions } from "./effects-panel";
 import { EmojiPanel, type EmojiActions } from "./emoji-panel";
 import { FiltersPanel } from "./filters-panel";
@@ -19,7 +24,7 @@ import { LiveCaptions, lineAt } from "./live-captions";
 import { LookEditor } from "./look-editor";
 import { PictureLayers, useVideoFilter, viewTransform } from "./picture-layers";
 import { ReelTimeline, type TimelineItem } from "./reel-timeline";
-import { CuePlayer, preloadSounds } from "./sfx-player";
+import { CuePlayer, MusicPlayer, preloadSounds } from "./sfx-player";
 import { StylePicker } from "./style-picker";
 import { soundOfWord, TranscriptEditor, WordPanel, type WordActions } from "./transcript-editor";
 
@@ -28,7 +33,7 @@ export type EditorOptions = { style: ReelStyle; look: ReelLookChanges; fonts: Re
 type Draft = { options: EditorOptions; edit: ReelEdit };
 type History = { past: Draft[]; present: Draft; future: Draft[]; group?: string; at?: number };
 
-const TABS = ["Style", "Text", "Emojis", "Effects", "Filters", "Audio"] as const;
+const TABS = ["Ask AI", "Style", "Text", "Cuts", "Emojis", "Effects", "Filters", "Audio"] as const;
 type Tab = (typeof TABS)[number];
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const same = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b);
@@ -38,6 +43,10 @@ const ms = (t: number) => Math.round(t * 1000) / 1000;
  * The reel editor: the reel's clean preview with everything drawn live as the render will make it (captions, emojis,
  * punch-ins, transitions and effects, the filter and overlays, and the sound effects), a timeline, and panels for every
  * change. Words can be edited right on the video. Export renders it again (free while the upload is kept).
+ *
+ * Two clocks: the edit, the panels and the timeline are on the recording's clock (`time`, the preview video's own),
+ * where cut stretches still exist and can be put back; what's drawn on the preview is the edit on the cut video's clock
+ * (onCutTimeline, as the render makes it), and the player plays straight over the cuts.
  */
 export function ReelEditor({
   jobId,
@@ -65,6 +74,9 @@ export function ReelEditor({
   const draft = history.present;
   const [tab, setTab] = useState<Tab>("Style");
   const [selected, setSelected] = useState<number | null>(null);
+  const [selectedTrim, setSelectedTrim] = useState<number | null>(null);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [asking, setAsking] = useState(false);
   const [exportState, setExportState] = useState<ReelExport | null>(initialExport);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -106,28 +118,60 @@ export function ReelEditor({
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  // What the render will do, from the same code (packages/core): the lines, punch-ins and sounds.
+  // What the render will do, from the same code (packages/core): the edit on the cut video's clock, and its lines,
+  // punch-ins and sounds. The lines and punch-ins go back on the recording's clock for the panels and the timeline.
+  const trims = draft.edit.trims;
+  const cutAt = useMemo(() => cutClock(draft.edit.duration, trims), [draft.edit.duration, trims]);
+  const cutWords = useMemo(() => new Set(trimmedWords(draft.edit.words, trims)), [draft.edit.words, trims]);
+  const view = useMemo(() => onCutTimeline(draft.edit), [draft.edit]);
   const look = useMemo(() => resolveLook(draft.options.style, draft.options.look), [draft.options.style, draft.options.look]);
-  const lines = useMemo(() => captionLines(draft.edit.words, draft.options.style, look, draft.edit), [draft.edit, draft.options.style, look]);
-  const windows = useMemo(() => (draft.options.zooms ? zoomWindows(draft.edit, lines) : []), [draft.edit, lines, draft.options.zooms]);
+  const viewLines = useMemo(() => captionLines(view.words, draft.options.style, look, view), [view, draft.options.style, look]);
+  const viewWindows = useMemo(() => (draft.options.zooms ? zoomWindows(view, viewLines) : []), [view, viewLines, draft.options.zooms]);
+  const lines = useMemo(
+    () => (trims.length ? viewLines.map((l) => ({ ...l, start: cutAt.toUpload(l.start), end: cutAt.toUpload(l.end), words: l.words.map((w) => ({ ...w, start: cutAt.toUpload(w.start), end: cutAt.toUpload(w.end) })) })) : viewLines),
+    [viewLines, cutAt, trims.length],
+  );
+  const windows = useMemo(() => (trims.length ? viewWindows.map((z) => ({ ...z, start: cutAt.toUpload(z.start), end: cutAt.toUpload(z.end) })) : viewWindows), [viewWindows, cutAt, trims.length]);
   const hookShown = draft.options.hook && Boolean(draft.edit.hook);
-  const cues = useMemo(() => (draft.options.sfx ? soundCues(draft.edit, hookShown) : []), [draft.edit, draft.options.sfx, hookShown]);
+  const cues = useMemo(() => (draft.options.sfx ? soundCues(view, hookShown) : []), [view, draft.options.sfx, hookShown]);
   const sounds = useRef(new CuePlayer());
   sounds.current.cues = cues;
   useEffect(() => preloadSounds(cues), [cues]);
+  // The music bed, on the cut clock, dipping while a word is being said (with a moment after it, as the render's release).
+  const music = useRef(new MusicPlayer());
+  const speech = useMemo(() => view.words.filter((_, i) => !view.hidden.includes(i)).map((w) => [w.start - 0.05, w.end + 0.3] as const), [view]);
+  music.current.music = view.audio.music;
+  music.current.speaking = (t) => {
+    let lo = 0;
+    let hi = speech.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (speech[mid][1] < t) lo = mid + 1;
+      else if (speech[mid][0] > t) hi = mid - 1;
+      else return true;
+    }
+    return false;
+  };
 
-  // The player: the time comes from the video every frame while it plays; sound effects follow it.
+  // The player: the time comes from the video every frame while it plays, jumping over cut stretches; sound effects
+  // follow it on the cut clock.
   const video = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const clocks = useRef({ trims, cutAt, duration: draft.edit.duration });
+  clocks.current = { trims, cutAt, duration: draft.edit.duration };
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
     const tick = () => {
       const v = video.current;
       if (v) {
+        const { trims: cut, cutAt: at, duration } = clocks.current;
+        const k = trimAt(cut, v.currentTime);
+        if (k >= 0 && !v.paused) v.currentTime = Math.min(duration, cut[k].end + 0.002);
         setTime(v.currentTime);
-        sounds.current.tick(v.currentTime, !v.paused);
+        sounds.current.tick(at.toCut(v.currentTime), !v.paused);
+        music.current.tick(at.toCut(v.currentTime), !v.paused);
       }
       frame = requestAnimationFrame(tick);
     };
@@ -135,12 +179,14 @@ export function ReelEditor({
     return () => {
       cancelAnimationFrame(frame);
       sounds.current.reset();
+      music.current.reset();
     };
   }, [playing]);
   const seek = (t: number) => {
     const clamped = Math.max(0, Math.min(draft.edit.duration, t));
     if (video.current) video.current.currentTime = clamped;
     sounds.current.reset();
+    music.current.reset();
     setTime(clamped);
   };
   const toggle = () => {
@@ -160,8 +206,10 @@ export function ReelEditor({
     resize.observe(el);
     return () => resize.disconnect();
   }, []);
-  const fx = effectsAt(draft.edit.effects, time);
-  const zoom = 1 + (draft.options.zooms ? punchAt(windows, time) : 0) + fx.zoom;
+  const viewTime = cutAt.toCut(time);
+  const fx = effectsAt(view.effects, viewTime);
+  const zoom = 1 + (draft.options.zooms ? punchAt(viewWindows, viewTime) : 0) + fx.zoom;
+  const inTrim = trimAt(trims, time);
   const { filter, svg } = useVideoFilter(draft.edit.picture, fx, frameWidth);
 
   /** A moment to show a word at: as it's said, on its line. */
@@ -204,6 +252,36 @@ export function ReelEditor({
         return { ...e, sounds: [...rest, ...(sound ? [{ at, sound }] : [])].sort((a, b) => a.at - b.at) };
       }),
     addEffect: (word, effect) => addEffect(effect, cueOf(draft.edit.words, word), true),
+    // A cut next to a word that's already cut joins that cut, so no sliver of sound is left between them.
+    cutWords: (words) =>
+      setTrims((t, e) => [
+        ...t,
+        ...runs(words).map(([a, b]) => {
+          const trim = wordsTrim(e.words, a, b);
+          const near = (i: number) => (i >= 0 && i < e.words.length ? trimAt(t, (e.words[i].start + e.words[i].end) / 2) : -1);
+          const [before, after] = [near(a - 1), near(b + 1)];
+          return { ...trim, start: before >= 0 ? t[before].end : trim.start, end: after >= 0 ? t[after].start : trim.end };
+        }),
+      ]),
+    restoreWord: (word) =>
+      setTrims((t, e) => {
+        const w = e.words[word];
+        const k = trimAt(t, (w.start + w.end) / 2);
+        return k < 0 ? t : t.filter((_, i) => i !== k);
+      }),
+  };
+
+  // Cuts: every change goes through parseTrims, which keeps them in order, merged, on whole frames.
+  const setTrims = (change: (trims: Trim[], e: ReelEdit) => Trim[]) => setEdit((e) => ({ ...e, trims: parseTrims(change(e.trims, e), e.duration) }));
+  const trimActions: TrimActions = {
+    restore: (index) => setTrims((t) => t.filter((_, i) => i !== index)),
+    restoreAll: (reason) => setTrims((t) => (reason ? t.filter((x) => x.reason !== reason) : [])),
+    cutPauses: () => setTrims((t, e) => [...t, ...pauseTrims(e.words, e.duration)]),
+    select: (index) => {
+      setSelectedTrim(index);
+      video.current?.pause();
+      seek(Math.min(draft.edit.duration, trims[index].start + 0.05));
+    },
   };
 
   // Effects come with their sound (when sound effects are on and the moment has none), and take it along.
@@ -247,6 +325,9 @@ export function ReelEditor({
     setHookSound: (hookSound: ReelSound | null) => setEdit((e) => ({ ...e, hookSound })),
     setOn: (sfx) => setOptions({ sfx }),
     seek,
+    setClean: (clean) => setEdit((e) => ({ ...e, audio: { ...e.audio, clean } })),
+    setMusic: (track) => setEdit((e) => ({ ...e, audio: { ...e.audio, music: track ? { track, volume: e.audio.music?.volume ?? MUSIC_DEFAULT_VOLUME } : null } })),
+    setMusicVolume: (volume) => setEdit((e) => ({ ...e, audio: { ...e.audio, music: e.audio.music ? { ...e.audio.music, volume: Math.round(volume * 100) / 100 } : null } }), "music-volume"),
   };
   const emojiActions: EmojiActions = {
     set: wordActions.setEmoji,
@@ -292,7 +373,7 @@ export function ReelEditor({
   useEffect(() => {
     if (opened.current || startAt === undefined || !Number.isFinite(startAt)) return;
     opened.current = true;
-    const t = Math.max(0, Math.min(draft.edit.duration, startAt));
+    const t = cutAt.toUpload(Math.max(0, Math.min(view.duration, startAt)));
     const at = lineAt(lines, t) ?? lineAt(lines, t + 0.3);
     seek(at ? Math.max(t, at.line.start + 0.05) : t);
     if (at) editWord(at.line.words[0].i);
@@ -302,7 +383,10 @@ export function ReelEditor({
 
   // A piece picked on the timeline: go there and open what edits it.
   const pick = (item: TimelineItem) => {
-    if (item.kind === "line" || item.kind === "zoom" || item.kind === "emoji") {
+    if (item.kind === "trim") {
+      setTab("Cuts");
+      trimActions.select(item.index);
+    } else if (item.kind === "line" || item.kind === "zoom" || item.kind === "emoji") {
       wordActions.select(item.word);
       setTab(item.kind === "emoji" ? "Emojis" : "Text");
     } else if (item.kind === "effect") {
@@ -312,6 +396,18 @@ export function ReelEditor({
       seek(Math.max(0, draft.edit.sounds[item.index].at - 0.6));
       setTab("Audio");
     }
+  };
+
+  // Chat edits: the message and the draft to the assistant; its checked changes come back and land as one undo step.
+  const ask = async (message: string) => {
+    setAsking(true);
+    setChat((c) => [...c, { from: "you", text: message }]);
+    const res = await fetch(`/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present }) }).catch(() => null);
+    const body = res ? ((await res.json().catch(() => ({}))) as { reply?: string; ops?: ChatOp[]; error?: string }) : { error: "You're offline. Try again in a moment." };
+    setAsking(false);
+    if (!res?.ok || !body.ops) return setChat((c) => [...c, { from: "ai", text: body.error ?? "That didn't work. Try again in a moment.", failed: true }]);
+    if (body.ops.length) update((d) => applyChatOps(d, body.ops!) as Draft);
+    setChat((c) => [...c, { from: "ai", text: body.reply ?? "Done.", changes: body.ops!.length }]);
   };
 
   // Export, then follow it until the new video is in.
@@ -407,14 +503,23 @@ export function ReelEditor({
             <LiveCaptions
               look={look}
               options={draft.options}
-              edit={draft.edit}
-              lines={lines}
-              time={time}
+              edit={view}
+              lines={viewLines}
+              time={viewTime}
               onWord={editWord}
               onHook={editHook}
               onMove={(offset, done) => update((d) => ({ ...d, options: { ...d.options, look: { ...d.options.look, offset: offset || undefined } } }), done ? "move-done" : "move")}
               selected={inline && "word" in inline ? inline.word : null}
             />
+            {/* Paused on a stretch that's cut: it isn't in the video, and it can be put back. */}
+            {!playing && inTrim >= 0 && (
+              <div className="absolute inset-x-3 top-1/2 z-20 flex -translate-y-1/2 items-center justify-between gap-2 rounded-lg bg-black/75 px-3 py-2 text-[13px] text-white backdrop-blur-sm">
+                <span>Cut from the video</span>
+                <button type="button" onClick={() => trimActions.restore(inTrim)} className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-black">
+                  Put back
+                </button>
+              </div>
+            )}
             {/* Paused: a small play button in the corner, clear of the captions being edited, and how to edit. */}
             {!playing && !inline && (
               <>
@@ -437,16 +542,16 @@ export function ReelEditor({
               onDone={() => closeInline()}
               onCancel={() => closeInline(true)}
             >
-              {"word" in inline && <WordPanel word={inline.word} edit={draft.edit} keyName={keyName} emojisOn={draft.options.emojis && !behind} zoomsOn={draft.options.zooms} sfxOn={draft.options.sfx} actions={wordActions} dark />}
+              {"word" in inline && <WordPanel word={inline.word} edit={draft.edit} keyName={keyName} emojisOn={draft.options.emojis && !behind} zoomsOn={draft.options.zooms} sfxOn={draft.options.sfx} cut={cutWords.has(inline.word)} actions={wordActions} dark />}
             </InlineEditor>
           )}
           <div className="mx-auto mt-3 flex w-full max-w-[300px] items-center gap-3 lg:max-w-[340px]">
             <Button variant="tertiary" size="sm" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
               {playing ? <Pause /> : <Play />}
             </Button>
-            <input type="range" min={0} max={draft.edit.duration} step={0.01} value={time} onChange={(e) => seek(Number(e.target.value))} className="h-1 min-w-0 flex-1 accent-[var(--ds-gray-1000)]" aria-label="Position in the reel" />
-            <span className="shrink-0 text-xs tabular-nums text-gray-900">
-              {clock(time)} / {clock(draft.edit.duration)}
+            <input type="range" min={0} max={view.duration} step={0.01} value={viewTime} onChange={(e) => seek(cutAt.toUpload(Number(e.target.value)))} className="h-1 min-w-0 flex-1 accent-[var(--ds-gray-1000)]" aria-label="Position in the reel" />
+            <span className="shrink-0 text-xs tabular-nums text-gray-900" title={trims.length ? `Cut from ${clock(draft.edit.duration)} recorded` : undefined}>
+              {clock(viewTime)} / {clock(view.duration)}
             </span>
           </div>
           {behind && <p className="mx-auto mt-2 max-w-[340px] text-center text-xs text-gray-900">In the video, the big words go behind you.</p>}
@@ -461,6 +566,8 @@ export function ReelEditor({
               </button>
             ))}
           </div>
+
+          {tab === "Ask AI" && <ChatPanel messages={chat} busy={asking} onSend={(m) => void ask(m)} onUndo={undo} />}
 
           {tab === "Style" && (
             <div className="space-y-5">
@@ -491,9 +598,12 @@ export function ReelEditor({
               emojisOn={draft.options.emojis}
               zoomsOn={draft.options.zooms}
               sfxOn={draft.options.sfx}
+              cut={cutWords}
               actions={wordActions}
             />
           )}
+
+          {tab === "Cuts" && <CutsPanel edit={draft.edit} cutLength={view.duration} time={time} selected={selectedTrim} actions={trimActions} />}
 
           {tab === "Emojis" && <EmojiPanel edit={draft.edit} lines={lines} time={time} on={draft.options.emojis} behind={behind} actions={emojiActions} />}
 
@@ -512,7 +622,7 @@ export function ReelEditor({
 
           {tab === "Filters" && <FiltersPanel picture={draft.edit.picture} onChange={setPicture} />}
 
-          {tab === "Audio" && <AudioPanel sounds={draft.edit.sounds} hookSound={draft.edit.hookSound} hookOn={hookShown} on={draft.options.sfx} time={time} actions={soundActions} />}
+          {tab === "Audio" && <AudioPanel sounds={draft.edit.sounds} hookSound={draft.edit.hookSound} hookOn={hookShown} on={draft.options.sfx} time={time} audio={draft.edit.audio} actions={soundActions} />}
         </div>
       </div>
 
@@ -521,6 +631,18 @@ export function ReelEditor({
       </div>
     </div>
   );
+}
+
+/** Words as runs of neighbours: [first, last] each. */
+function runs(words: number[]): [number, number][] {
+  const sorted = [...new Set(words)].sort((a, b) => a - b);
+  const out: [number, number][] = [];
+  for (const w of sorted) {
+    const last = out[out.length - 1];
+    if (last && w === last[1] + 1) last[1] = w;
+    else out.push([w, w]);
+  }
+  return out;
 }
 
 /** The edit bar under the video: the text, live as it's typed; Enter or Done keeps it, Escape puts it back. */

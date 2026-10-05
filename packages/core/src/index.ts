@@ -15,3 +15,7 @@ export * from "./effects";
 export * from "./picture";
 export * from "./sounds";
 export * from "./timeline";
+export * from "./trims";
+export * from "./music-beds";
+export * from "./edit-styles";
+export * from "./reel-chat";

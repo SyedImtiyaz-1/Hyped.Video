@@ -2,11 +2,16 @@
 import { Check } from "lucide-react";
 import { useEffect, useState, type CSSProperties } from "react";
 import { REEL_STYLES, resolveLook, type ReelLookChanges, type ReelStyle } from "@launchreel/core/captions";
+import { effectsAt } from "@launchreel/core/effects";
+import { parsePicture, type ReelPicture } from "@launchreel/core/picture";
 import type { ReelFont } from "@launchreel/core/reel";
 import { cn } from "@/lib/cn";
 import { CaptionPreview } from "./caption-preview";
 import { BIG_SAMPLES } from "./font-picker";
 import { REEL_STYLE_INFO } from "./labels";
+import { PictureLayers, useVideoFilter } from "./picture-layers";
+
+const STILL = effectsAt([], 0);
 
 /** A word every `ms`, for the previews' sample line; still for people who ask for less motion. */
 export function useTick(ms = 450) {
@@ -21,14 +26,19 @@ export function useTick(ms = 450) {
 
 /**
  * The sample frame (a creator talking to camera) with a style's captions on it, saying the sample line. "Behind you"
- * draws its big word on the frame and a cut-out of the speaker back over it, the way the render does.
+ * draws its big word on the frame and a cut-out of the speaker back over it, the way the render does. With `picture`,
+ * the frame takes that grade and its overlays (an edit style's look), drawn by the editor's own filter code.
  */
-export function StyleFrame({ style, changes, fonts = ["classic"], tick, className }: { style: ReelStyle; changes?: ReelLookChanges; fonts?: ReelFont[]; tick: number; className?: string }) {
+export function StyleFrame({ style, changes, fonts = ["classic"], tick, className, picture }: { style: ReelStyle; changes?: ReelLookChanges; fonts?: ReelFont[]; tick: number; className?: string; picture?: Partial<ReelPicture> }) {
   const big = BIG_SAMPLES[fonts[Math.floor(tick / 4) % fonts.length]];
+  const look = parsePicture({ filter: "none", strength: 1, grain: false, vignette: false, letterbox: false, ...picture });
+  const { filter, svg } = useVideoFilter(look, STILL, 160);
   return (
     <span className={cn("relative block aspect-[9/16] w-full overflow-hidden bg-[#1a1d24] [container-type:inline-size]", className)}>
+      {svg}
       {/* eslint-disable-next-line @next/next/no-img-element -- a small static still, the same in every card */}
-      <img src="/reels/sample-frame.jpg" alt="" className="absolute inset-0 size-full object-cover" loading="lazy" decoding="async" />
+      <img src="/reels/sample-frame.jpg" alt="" className="absolute inset-0 size-full object-cover" style={{ filter }} loading="lazy" decoding="async" />
+      {picture && <PictureLayers picture={look} fx={STILL} />}
       {style === "behind" && (
         <>
           <span className={cn("absolute inset-x-0 top-[21%] text-center leading-none", big.className)} style={{ ...big.style, fontSize: "19cqw", textShadow: "0 0.6cqw 2.5cqw rgb(0 0 0 / 0.45)" } as CSSProperties}>

@@ -17,8 +17,8 @@ import { requireUser } from "@/lib/user";
 export const metadata = { title: "Reels" };
 export const dynamic = "force-dynamic";
 
-export default async function ReelsPage() {
-  const [user, currency] = await Promise.all([requireUser(), visitorCurrency()]);
+export default async function ReelsPage({ searchParams }: { searchParams: Promise<{ pending?: string; style?: string }> }) {
+  const [user, currency, query] = await Promise.all([requireUser(), visitorCurrency(), searchParams]);
   const [reels, paid]: [Job[], number] = isDemo
     ? [demoJobs().filter((j) => j.kind === "reel"), 1]
     : await getDb().then((db) =>
@@ -34,7 +34,7 @@ export default async function ReelsPage() {
       <AutoRefresh active={reels.some((j) => j.status === "QUEUED" || j.status === "RUNNING")} />
       <PageHeader narrow title="Reels" description="Your own talking-head video, Short or demo, back with animated captions, zooms and sound effects." />
       <PageBody className="max-w-[880px] space-y-8">
-        <ReelForm credits={user.credits} reelCredits={user.reelCredits} trial={paid === 0} />
+        <ReelForm credits={user.credits} reelCredits={user.reelCredits} trial={paid === 0} pending={query.pending === "1" ? true : query.pending === "0" ? false : undefined} startStyle={query.style} />
         {user.reelCredits === 0 && reelPackOn() && (
           <p className="-mt-4 text-[13px] text-gray-900">
             Making reels often?{" "}
