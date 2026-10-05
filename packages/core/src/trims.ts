@@ -5,6 +5,7 @@
 //
 // Trims start and end on whole frames (REEL_FPS), so the picture and the sound are cut at exactly the same moments
 // (48 kHz audio has 1,600 samples a frame) and stay in sync however many cuts there are.
+import { BROLL_LENGTH, type BrollShot } from "./broll";
 import type { ReelEdit } from "./reel";
 
 export const REEL_FPS = 30;
@@ -150,7 +151,8 @@ export function trimmedWords(words: readonly { start: number; end: number }[], t
 /**
  * The edit on the cut video's clock, as the render makes it and the editor previews it: every time moved onto the cut
  * clock, cut words hidden (with their highlights, emojis and punch-ins), and sounds and effects inside a trim dropped.
- * Word numbers stay as they are, so a word picked on the preview is the same word in the edit.
+ * B-roll that starts in a trim starts at the cut instead, kept inside the video and clear of the shot before it. Word
+ * numbers stay as they are, so a word picked on the preview is the same word in the edit.
  */
 export function onCutTimeline(edit: ReelEdit): ReelEdit {
   if (!edit.trims.length) return edit;
@@ -167,6 +169,13 @@ export function onCutTimeline(edit: ReelEdit): ReelEdit {
     sounds: edit.sounds.filter((s) => clock.isKept(s.at)).map((s) => ({ ...s, at: clock.toCut(s.at) })),
     effects: edit.effects.filter((e) => clock.isKept(e.at)).map((e) => ({ ...e, at: clock.toCut(e.at) })),
     cuts: [...new Set([...edit.cuts.filter((c) => clock.isKept(c)).map(clock.toCut), ...clock.joints])].sort((a, b) => a - b),
+    broll: edit.broll.reduce<BrollShot[]>((out, s) => {
+      const at = clock.toCut(s.at);
+      const last = out[out.length - 1];
+      const length = Math.min(s.length, clock.duration - at);
+      if ((!last || at >= last.at + last.length) && length >= BROLL_LENGTH.min) out.push({ ...s, at, length });
+      return out;
+    }, []),
     trims: [],
   };
 }

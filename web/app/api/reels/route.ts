@@ -32,6 +32,7 @@ const Body = z.object({
   zooms: z.boolean().default(true),
   sfx: z.boolean().default(true),
   hook: z.boolean().default(true),
+  broll: z.boolean().default(true),
   language: z.enum(REEL_LANGUAGES as [ReelLanguage, ...ReelLanguage[]]).default("auto"),
   // How much dead air the first render cuts; every cut can be put back in the editor.
   cleanup: z.enum(REEL_CLEANUPS as [ReelCleanup, ...ReelCleanup[]]).default("pauses"),
@@ -80,6 +81,7 @@ export async function POST(req: Request) {
     zooms: body.zooms,
     sfx: body.sfx,
     hook: body.hook,
+    broll: body.broll,
     language: body.language,
     cleanup: body.cleanup,
     editStyle: body.editStyle,

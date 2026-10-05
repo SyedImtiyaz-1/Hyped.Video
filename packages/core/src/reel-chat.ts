@@ -24,6 +24,7 @@ export type ChatOp =
   | { op: "sound"; at: number; sound: ReelSound | null }
   | { op: "effect"; at: number; effect: ReelEffect }
   | { op: "remove_effects"; from: number; to: number }
+  | { op: "remove_broll"; from: number; to: number }
   | { op: "cut_words"; from: number; to: number }
   | { op: "restore_cuts"; reason: TrimReason | "all" }
   | { op: "hook"; text: string | null }
@@ -32,7 +33,7 @@ export type ChatOp =
   | { op: "picture"; filter: ReelFilter | null; vignette: boolean | null; letterbox: boolean | null; grain: boolean | null }
   | { op: "extras"; emojis: boolean | null; zooms: boolean | null; sfx: boolean | null };
 
-const OPS = ["caption_style", "caption_look", "highlight", "emoji", "zoom", "sound", "effect", "remove_effects", "cut_words", "restore_cuts", "hook", "music", "clean_audio", "picture", "extras"] as const;
+const OPS = ["caption_style", "caption_look", "highlight", "emoji", "zoom", "sound", "effect", "remove_effects", "remove_broll", "cut_words", "restore_cuts", "hook", "music", "clean_audio", "picture", "extras"] as const;
 export const MAX_CHAT_OPS = 40;
 
 const nullable = (type: string | object) => (typeof type === "string" ? { type: [type, "null"] } : { anyOf: [type, { type: "null" }] });
@@ -97,6 +98,7 @@ export const CHAT_SYSTEM = [
   "- zoom {word, strength}: a punch-in on a word (subtle, medium, strong), or null to remove it.",
   "- sound {at, sound}: a sound effect at a second of the video, or sound null to remove the one there.",
   "- effect {at, effect}: a visual effect at a second.  remove_effects {from, to}: remove effects between two seconds.",
+  "- remove_broll {from, to}: remove the stock B-roll shots playing between two seconds (0 to the end for all). B-roll can't be added or swapped here: for that, say to use the B-roll tab.",
   "- cut_words {from, to}: cut words from number to number (inclusive) out of the video.  restore_cuts {reason}: put back cut pauses, fillers, retakes, the customer's own cuts, or all.",
   "- hook {text}: the big title at the start (2-6 words), or null to turn it off.",
   "- music {track, volume}: a music bed (or track null for none), volume 0-1 (null keeps it).",
@@ -135,6 +137,7 @@ export function chatContext(draft: ChatDraft, playhead: number): string {
     ...rows.filter((r) => r.length).map((r, k) => `${t2(lines[k]?.start ?? 0)} ${r.join(" ")}`),
     `Highlights: ${edit.keywords.join(", ") || "none"}. Emojis: ${edit.emojis.map((e) => `${e.word} ${e.emoji}`).join(", ") || "none"}. Punch-ins: ${edit.zooms.map((z) => `${z.word} ${z.strength}`).join(", ") || "none"}.`,
     `Effects: ${view.effects.map((e) => `${e.effect} at ${t2(e.at)}`).join(", ") || "none"}. Sounds: ${view.sounds.map((s) => `${s.sound} at ${t2(s.at)}`).join(", ") || "none"}.`,
+    `B-roll: ${view.broll.map((b) => `"${b.query || "stock clip"}" ${t2(b.at)}-${t2(b.at + b.length)}`).join(", ") || "none"}.`,
     `Cuts: ${edit.trims.map((t) => `${t.reason} ${t2(clock.toCut(t.start))} (${(t.end - t.start).toFixed(1)}s)`).join(", ") || "none"}.`,
     `Available: styles ${REEL_STYLES.join(", ")}; fonts ${CAPTION_FONTS.join(", ")}; effects ${REEL_EFFECTS.join(", ")}; sounds ${REEL_SOUND_IDS.join(", ")}; music ${REEL_MUSIC_IDS.join(", ")}; filters ${REEL_FILTERS.join(", ")}.`,
   ].join("\n");
@@ -190,7 +193,8 @@ export function parseChatOps(value: unknown, edit: ReelEdit): ChatOp[] {
         if (second(r.at) !== null && isReelEffect(r.effect)) out.push({ op: "effect", at: second(r.at)!, effect: r.effect });
         break;
       case "remove_effects":
-        if (second(r.from) !== null && second(r.to) !== null) out.push({ op: "remove_effects", from: second(r.from)!, to: second(r.to)! });
+      case "remove_broll":
+        if (second(r.from) !== null && second(r.to) !== null) out.push({ op: r.op, from: second(r.from)!, to: second(r.to)! });
         break;
       case "cut_words": {
         const [a, b] = [word(r.from), word(r.to)];
@@ -264,6 +268,13 @@ export function applyChatOps(draft: ChatDraft, ops: readonly ChatOp[]): ChatDraf
       case "remove_effects": {
         const [a, b] = [onUpload(Math.min(op.from, op.to)) - 0.05, onUpload(Math.max(op.from, op.to)) + 0.05];
         edit = { ...edit, effects: edit.effects.filter((e) => e.at < a || e.at > b) };
+        break;
+      }
+      case "remove_broll": {
+        // Shots playing in the span, on the cut clock as the customer sees them.
+        const clock = cutClock(edit.duration, edit.trims);
+        const [a, b] = [Math.min(op.from, op.to), Math.max(op.from, op.to)];
+        edit = { ...edit, broll: edit.broll.filter((s) => clock.toCut(s.at) + s.length <= a + 0.05 || clock.toCut(s.at) >= b - 0.05) };
         break;
       }
       case "cut_words":

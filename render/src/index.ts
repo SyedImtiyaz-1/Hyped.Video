@@ -27,6 +27,9 @@ import {
   REEL_PLAN_MODEL,
   CHAT_SCHEMA,
   CHAT_SYSTEM,
+  pexelsClip,
+  type BrollClip,
+  type PexelsVideo,
   REEL_UPLOAD_TYPES,
   reelSecondsFor,
   type Engine,
@@ -51,6 +54,8 @@ const ANTHROPIC_HOST = "anthropic.internal";
 const OPENAI_HOST = "openai.internal";
 // Word timings for voiceover captions: speech recognition on Workers AI, so the audio never leaves Cloudflare.
 const TIMINGS_HOST = "timings.internal";
+// Stock B-roll searches for reels: Pexels' API, with this Worker's key added (the footage itself is on public URLs).
+const PEXELS_HOST = "pexels.internal";
 
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -108,6 +113,7 @@ VideoSandbox.outboundByHost = {
       h.delete("x-api-key");
     }),
   [TIMINGS_HOST]: (request: Request, env: Env) => wordTimings(request, env),
+  [PEXELS_HOST]: (request: Request, env: Env) => forward(request, "https://api.pexels.com", env.PEXELS_API_KEY, "PEXELS_API_KEY", (h, key) => h.set("authorization", key)),
 };
 
 /** A job to run, or (`export`) a re-export of an edited reel: its revision, in Job.reel.export. */
@@ -402,7 +408,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         const spec: ReelSpec = {
           jobId,
           input,
-          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, broll: reel.broll, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
           // The container measures the real length: longer than the credits cover fails, and is refunded.
           maxSeconds: reelSecondsFor(job.creditsCost) + 1,
           watermark: job.watermark,
@@ -421,6 +427,8 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
             OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`,
             OPENAI_API_KEY: "added-by-worker",
             HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`,
+            // Stock B-roll searches; the footage downloads from Pexels' public URLs.
+            PEXELS_BASE_URL: `http://${PEXELS_HOST}`,
             PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
           },
         });
@@ -546,7 +554,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         const spec: ReelSpec = {
           jobId,
           input,
-          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, broll: reel.broll, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
           maxSeconds: reelSecondsFor(job.creditsCost) + 1,
           watermark: job.watermark,
           watermarkText: `Made with ${this.env.BRAND_NAME}`,
@@ -558,7 +566,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         await sandbox.startProcess("runuser -u agent -- node /app/dist/reel.mjs", {
           processId,
           cwd: "/workspace",
-          env: { HOME: "/home/agent", JOB_ROOT: "/workspace", OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`, OPENAI_API_KEY: "added-by-worker", HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`, PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright" },
+          env: { HOME: "/home/agent", JOB_ROOT: "/workspace", OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`, OPENAI_API_KEY: "added-by-worker", HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`, PEXELS_BASE_URL: `http://${PEXELS_HOST}`, PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright" },
         });
       });
 
@@ -761,20 +769,44 @@ async function reelChat(env: Env, input: ReelChatInput): Promise<ReelChatResult>
   return { reply: String(parsed.reply ?? "").slice(0, 600), ops: Array.isArray(parsed.ops) ? parsed.ops : [], inputTokens: body.usage?.prompt_tokens ?? 0, outputTokens: body.usage?.completion_tokens ?? 0 };
 }
 
+/** Stock footage for a search: clips, or why there are none (`status`: 503 not set up, 429 Pexels' hourly limit, 502 Pexels failed). */
+export type BrollSearch = { clips: BrollClip[]; error?: string; status?: 429 | 502 | 503 };
+
+/** Stock footage for a search, as clips (Pexels, in the reel's orientation, at least 3 seconds long). */
+async function searchBroll(env: Env, input: { query: string; portrait: boolean }): Promise<BrollSearch> {
+  if (!env.PEXELS_API_KEY) return { clips: [], error: "Stock B-roll isn't set up yet.", status: 503 };
+  const query = String(input.query ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!query) return { clips: [] };
+  const url = `https://api.pexels.com/videos/search?${new URLSearchParams({ query, orientation: input.portrait ? "portrait" : "landscape", per_page: "15", size: "medium" })}`;
+  const res = await fetch(url, { headers: { authorization: env.PEXELS_API_KEY }, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+  if (res?.status === 429) return { clips: [], error: "Stock search is busy right now. Try again in a few minutes.", status: 429 };
+  if (!res?.ok) return { clips: [], error: `Pexels didn't answer (${res?.status ?? "no answer"})`, status: 502 };
+  const body = (await res.json()) as { videos?: PexelsVideo[] };
+  const clips = (body.videos ?? []).filter((v) => v.duration >= 3).map((v) => pexelsClip(v)).filter((c): c is BrollClip => c !== null);
+  return { clips: clips.slice(0, 12) };
+}
+
 /**
- * The reel editor's chat edits, for the web app (its REEL_ASSISTANT service binding to this entrypoint). RPC only: no
- * URL reaches it, so only the web Worker can ask, after it has checked who's asking.
+ * The reel editor's assistant for the web app (its REEL_ASSISTANT service binding to this entrypoint): chat edits, and
+ * stock B-roll searches. RPC only: no URL reaches it, so only the web Worker can ask, after it has checked who's asking.
  */
 export class ReelAssistant extends WorkerEntrypoint<Env> {
   async chat(input: ReelChatInput): Promise<ReelChatResult> {
     return reelChat(this.env, input);
+  }
+  async searchBroll(input: { query: string; portrait: boolean }): Promise<BrollSearch> {
+    return searchBroll(this.env, input);
   }
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    // Local development only, like /dev/start: the web app's `next dev` asks for chat edits here.
+    // Local development only, like /dev/start: the web app's `next dev` asks for B-roll searches and chat edits here.
+    if (request.method === "POST" && url.pathname === "/dev/broll-search") {
+      if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+      return Response.json(await searchBroll(env, (await request.json()) as { query: string; portrait: boolean }));
+    }
     if (request.method === "POST" && url.pathname === "/dev/reel-chat") {
       if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
       try {

@@ -8,7 +8,9 @@ import { REEL_SOUNDS } from "@launchreel/core/sounds";
 import { emojiShows, type ZoomWindow } from "@launchreel/core/timeline";
 import { cn } from "@/lib/cn";
 
-export type TimelineItem = { kind: "line"; word: number } | { kind: "effect"; index: number } | { kind: "zoom"; word: number } | { kind: "emoji"; word: number } | { kind: "sound"; index: number } | { kind: "trim"; index: number };
+export type TimelineItem = { kind: "line"; word: number } | { kind: "effect"; index: number } | { kind: "zoom"; word: number } | { kind: "emoji"; word: number } | { kind: "sound"; index: number } | { kind: "trim"; index: number } | { kind: "broll"; index: number };
+/** A B-roll shot's span on the recording's clock (it plays straight over any cut inside it). */
+export type BrollSpan = { index: number; start: number; end: number; query: string };
 
 const TRIM_NAME = { pause: "Pause", filler: "Filler", retake: "Retake", cut: "Cut" } as const;
 
@@ -17,10 +19,10 @@ const ZOOMS = [1, 2, 4, 8];
 
 /**
  * The reel along time, CapCut-style, on the recording's clock: a track for what's cut (hatched across every track),
- * a track each for the captions, the effects and punch-ins, the emojis and the sounds, the shot changes marked across
- * them, and the playhead. Click or drag anywhere to move the playhead; click a piece to go to it and edit it.
+ * a track each for the captions, the B-roll, the effects and punch-ins, the emojis and the sounds, the shot changes
+ * marked across them, and the playhead. Click or drag anywhere to move the playhead; click a piece to go to it and edit it.
  */
-export function ReelTimeline({ edit, lines, windows, time, duration, showEmojis, showZooms, showSounds, onSeek, onPick }: { edit: ReelEdit; lines: CaptionLine[]; windows: ZoomWindow[]; time: number; duration: number; showEmojis: boolean; showZooms: boolean; showSounds: boolean; onSeek: (t: number) => void; onPick: (item: TimelineItem) => void }) {
+export function ReelTimeline({ edit, lines, windows, broll, time, duration, showEmojis, showZooms, showSounds, onSeek, onPick }: { edit: ReelEdit; lines: CaptionLine[]; windows: ZoomWindow[]; broll: BrollSpan[]; time: number; duration: number; showEmojis: boolean; showZooms: boolean; showSounds: boolean; onSeek: (t: number) => void; onPick: (item: TimelineItem) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [zoom, setZoom] = useState(1);
@@ -96,6 +98,9 @@ export function ReelTimeline({ edit, lines, windows, time, duration, showEmojis,
       name: "Captions",
       items: lines.map((l, li) => piece({ kind: "line", word: l.words[0].i }, x(l.start), x(l.end) - x(l.start) - 1, "bg-gray-alpha-300 text-gray-1000 hover:bg-gray-alpha-400", l.text, l.text, 4 + (li % 2) * 0)),
     },
+    ...(broll.length
+      ? [{ name: "B-roll", items: broll.map((b) => piece({ kind: "broll", index: b.index }, x(b.start), x(b.end) - x(b.start) - 1, "bg-green-300 text-green-1000 hover:bg-green-400", `B-roll: ${b.query || "stock clip"} at ${b.start.toFixed(1)} s`, b.query || "B-roll")) }]
+      : []),
     ...(showZooms && windows.length
       ? [{ name: "Zooms", items: windows.map((z) => piece({ kind: "zoom", word: z.word ?? 0 }, x(z.start), x(z.end + 0.45) - x(z.start), "bg-blue-300 text-blue-1000 hover:bg-blue-400", `Punch-in at ${z.start.toFixed(1)} s`, "Zoom")) }]
       : []),

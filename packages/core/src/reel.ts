@@ -7,6 +7,7 @@ import { EFFECTS, isReelEffect, type PlacedEffect } from "./effects";
 import { customerError } from "./engines";
 import { parsePicture, type ReelPicture } from "./picture";
 import { isReelSound, type ReelSound } from "./sounds";
+import { parseBroll, type BrollShot } from "./broll";
 import { isEditStyle, isStrength, type ReelEditStyle, type ReelStrength } from "./edit-styles";
 import { parseAudio, type ReelAudio } from "./music-beds";
 import { parseTrims, REEL_CLEANUPS, type ReelCleanup, type Trim } from "./trims";
@@ -36,8 +37,8 @@ export const REEL_MAX_FONTS = 4;
  * cut can be put back in the editor). The edit style sets the rest as a starting point; the first render also takes
  * its picture grade, music bed and cut effects from it.
  */
-export type ReelOptions = { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; language: ReelLanguage; cleanup: ReelCleanup; editStyle: ReelEditStyle; strength: ReelStrength };
-export const REEL_DEFAULTS: ReelOptions = { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, language: "auto", cleanup: "pauses", editStyle: "creator", strength: "medium" };
+export type ReelOptions = { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; broll: boolean; language: ReelLanguage; cleanup: ReelCleanup; editStyle: ReelEditStyle; strength: ReelStrength };
+export const REEL_DEFAULTS: ReelOptions = { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, broll: true, language: "auto", cleanup: "pauses", editStyle: "creator", strength: "medium" };
 
 /** Font styles read back defensively: known ones, each once, at most REEL_MAX_FONTS, else Classic. */
 export function parseFonts(value: unknown): ReelFont[] {
@@ -85,6 +86,7 @@ export type EmojiStyle = { size: EmojiSize; place: EmojiPlace };
  * - the picture's look, the hook title and its sound, and where the upload cuts from shot to shot
  * - the stretches cut out (trims: pauses, filler sounds, retakes, the customer's own cuts)
  * - the sound: the voice's background noise cleaned out, and a music bed
+ * - stock B-roll laid over the speaker (broll.ts)
  * Everything is on the upload's clock; onCutTimeline() (trims.ts) moves it onto the cut video's. Marks on words
  * survive a change in how words are grouped into lines.
  */
@@ -109,6 +111,7 @@ export type ReelEdit = {
   hook: string;
   trims: Trim[];
   audio: ReelAudio;
+  broll: BrollShot[];
 };
 
 // What the caption fonts can draw (as the runner checks): Latin, Greek and Cyrillic letters, digits and punctuation.
@@ -196,6 +199,7 @@ export function parseReelEdit(value: unknown, original?: ReelEdit): ReelEdit | n
     hook: typeof v.hook === "string" ? v.hook.replace(/[\p{Extended_Pictographic}"“”]/gu, "").replace(/\s+/g, " ").trim().slice(0, 48) : "",
     trims: parseTrims(v.trims, duration),
     audio: parseAudio(v.audio),
+    broll: parseBroll(v.broll, duration),
   };
 }
 
@@ -274,6 +278,8 @@ export function parseReel(value: unknown): ReelJob | null {
     zooms: flag(v.zooms, REEL_DEFAULTS.zooms),
     sfx: flag(v.sfx, REEL_DEFAULTS.sfx),
     hook: flag(v.hook, REEL_DEFAULTS.hook),
+    // Reels from before B-roll had none.
+    broll: flag(v.broll, false),
     language: REEL_LANGUAGES.includes(v.language as ReelLanguage) ? (v.language as ReelLanguage) : REEL_DEFAULTS.language,
     // Reels from before cleanup cut nothing.
     cleanup: REEL_CLEANUPS.includes(v.cleanup as ReelCleanup) ? (v.cleanup as ReelCleanup) : "off",

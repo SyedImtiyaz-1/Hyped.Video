@@ -11,9 +11,12 @@ import { punchAt, soundCues, zoomAim, zoomWindows } from "@launchreel/core/timel
 import { cutClock, onCutTimeline, parseTrims, pauseTrims, trimAt, trimmedWords, wordsTrim, type Trim } from "@launchreel/core/trims";
 import { MUSIC_DEFAULT_VOLUME } from "@launchreel/core/music-beds";
 import { applyChatOps, type ChatOp } from "@launchreel/core/reel-chat";
+import { BROLL_LENGTH, brollAt, longestShot, parseBroll, type BrollShot } from "@launchreel/core/broll";
 import { cn } from "@/lib/cn";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { AudioPanel, type SoundActions } from "./audio-panel";
+import { BrollLayer } from "./broll-layer";
+import { BrollPanel, type BrollActions, type BrollRow } from "./broll-panel";
 import { ChatPanel, type ChatMessage } from "./chat-panel";
 import { CutsPanel, type TrimActions } from "./cuts-panel";
 import { EffectsPanel, type EffectActions } from "./effects-panel";
@@ -33,7 +36,7 @@ export type EditorOptions = { style: ReelStyle; look: ReelLookChanges; fonts: Re
 type Draft = { options: EditorOptions; edit: ReelEdit };
 type History = { past: Draft[]; present: Draft; future: Draft[]; group?: string; at?: number };
 
-const TABS = ["Ask AI", "Style", "Text", "Cuts", "Emojis", "Effects", "Filters", "Audio"] as const;
+const TABS = ["Ask AI", "Style", "Text", "Cuts", "B-roll", "Emojis", "Effects", "Filters", "Audio"] as const;
 type Tab = (typeof TABS)[number];
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const same = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b);
@@ -75,6 +78,7 @@ export function ReelEditor({
   const [tab, setTab] = useState<Tab>("Style");
   const [selected, setSelected] = useState<number | null>(null);
   const [selectedTrim, setSelectedTrim] = useState<number | null>(null);
+  const [selectedShot, setSelectedShot] = useState<number | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [asking, setAsking] = useState(false);
   const [exportState, setExportState] = useState<ReelExport | null>(initialExport);
@@ -132,6 +136,18 @@ export function ReelEditor({
     [viewLines, cutAt, trims.length],
   );
   const windows = useMemo(() => (trims.length ? viewWindows.map((z) => ({ ...z, start: cutAt.toUpload(z.start), end: cutAt.toUpload(z.end) })) : viewWindows), [viewWindows, cutAt, trims.length]);
+  // B-roll: each stored shot, when it plays on the cut clock (null when it doesn't: it overlaps the one before, or the
+  // end), and how long it may get (to the next shot, the end, or its clip's end); on the recording's clock for the timeline.
+  const brollRows = useMemo<BrollRow[]>(() => {
+    const shown = new Map(view.broll.map((v) => [v.clip.id * 1e6 + Math.round(v.at * 1000), v]));
+    return draft.edit.broll.map((shot) => {
+      const v = shown.get(shot.clip.id * 1e6 + Math.round(cutAt.toCut(shot.at) * 1000)) ?? null;
+      if (!v) return { shot, at: null, length: shot.length, most: shot.length };
+      const next = view.broll.find((x) => x.at > v.at);
+      return { shot, at: v.at, length: v.length, most: Math.floor(Math.min(longestShot(shot.clip), (next?.at ?? view.duration) - v.at) * 10) / 10 };
+    });
+  }, [draft.edit.broll, view, cutAt]);
+  const brollSpans = useMemo(() => brollRows.flatMap((r, index) => (r.at === null ? [] : [{ index, start: cutAt.toUpload(r.at), end: cutAt.toUpload(r.at + r.length), query: r.shot.query }])), [brollRows, cutAt]);
   const hookShown = draft.options.hook && Boolean(draft.edit.hook);
   const cues = useMemo(() => (draft.options.sfx ? soundCues(view, hookShown) : []), [view, draft.options.sfx, hookShown]);
   const sounds = useRef(new CuePlayer());
@@ -336,6 +352,35 @@ export function ReelEditor({
     seek,
   };
   const setPicture = (patch: Partial<ReelPicture>, group?: string) => setEdit((e) => ({ ...e, picture: { ...e.picture, ...patch } }), group);
+  // B-roll: every change goes through parseBroll, which keeps the shots in order, apart and inside their clips.
+  const setBroll = (change: (shots: BrollShot[]) => BrollShot[], group?: string) => setEdit((e) => ({ ...e, broll: parseBroll(change(e.broll), e.duration) }), group);
+  const shotHere = brollRows.findIndex((r) => r.at !== null && viewTime >= r.at && viewTime < r.at + r.length);
+  const brollActions: BrollActions = {
+    add: (clip, query) => {
+      const next = view.broll.find((s) => s.at > viewTime);
+      const room = Math.min((next?.at ?? view.duration) - viewTime, longestShot(clip));
+      if (brollAt(view.broll, viewTime) >= 0) return "A shot already plays here. Swap it instead.";
+      if (room < BROLL_LENGTH.min) return next ? "There's no room before the next shot. Move the playhead, or shorten that shot." : "There's no room before the end of the reel.";
+      setBroll((shots) => [...shots, { at: ms(time), length: Math.floor(Math.min(BROLL_LENGTH.default, room) * 100) / 100, query, clip }]);
+      return null;
+    },
+    swap: (index, clip, query) => setBroll((shots) => shots.map((s, i) => (i === index ? { ...s, clip, query: query || s.query, length: Math.min(s.length, longestShot(clip)) } : s))),
+    setLength: (index, length) => setBroll((shots) => shots.map((s, i) => (i === index ? { ...s, length: Math.round(length * 100) / 100 } : s)), `broll-length-${index}`),
+    remove: (index) => {
+      setSelectedShot(null);
+      setBroll((shots) => shots.filter((_, i) => i !== index));
+    },
+    removeAll: () => {
+      setSelectedShot(null);
+      setBroll(() => []);
+    },
+    select: (index) => {
+      const row = brollRows[index];
+      setSelectedShot(index);
+      video.current?.pause();
+      seek(row?.at != null ? cutAt.toUpload(row.at + 0.05) : (row?.shot.at ?? 0));
+    },
+  };
 
   // Editing on the video: click a word (or the hook) and it pauses, with an edit bar under the picture. The Text tab
   // follows along, so both ways of editing stay in step.
@@ -386,6 +431,9 @@ export function ReelEditor({
     if (item.kind === "trim") {
       setTab("Cuts");
       trimActions.select(item.index);
+    } else if (item.kind === "broll") {
+      setTab("B-roll");
+      brollActions.select(item.index);
     } else if (item.kind === "line" || item.kind === "zoom" || item.kind === "emoji") {
       wordActions.select(item.word);
       setTab(item.kind === "emoji" ? "Emojis" : "Text");
@@ -499,6 +547,7 @@ export function ReelEditor({
               onSeeked={(e) => setTime(e.currentTarget.currentTime)}
               onTimeUpdate={(e) => !playing && setTime(e.currentTarget.currentTime)}
             />
+            <BrollLayer shots={view.broll} time={viewTime} playing={playing} filter={filter} />
             <PictureLayers picture={draft.edit.picture} fx={fx} animate={playing} />
             <LiveCaptions
               look={look}
@@ -561,7 +610,7 @@ export function ReelEditor({
         <div className="min-w-0">
           <div className="mb-4 flex h-10 items-center gap-0.5 overflow-x-auto rounded-md border border-gray-alpha-400 bg-background-100 p-1" role="tablist" aria-label="Edit">
             {TABS.map((t) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={cn("h-full flex-1 shrink-0 rounded px-2 text-[13px] transition-colors sm:px-3 sm:text-sm", tab === t ? "bg-gray-alpha-200 font-medium text-gray-1000" : "text-gray-900 hover:text-gray-1000")}>
+              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={cn("h-full flex-1 shrink-0 whitespace-nowrap rounded px-2 text-[13px] transition-colors sm:px-3 sm:text-sm", tab === t ? "bg-gray-alpha-200 font-medium text-gray-1000" : "text-gray-900 hover:text-gray-1000")}>
                 {t}
               </button>
             ))}
@@ -605,6 +654,8 @@ export function ReelEditor({
 
           {tab === "Cuts" && <CutsPanel edit={draft.edit} cutLength={view.duration} time={time} selected={selectedTrim} actions={trimActions} />}
 
+          {tab === "B-roll" && <BrollPanel jobId={jobId} rows={brollRows} portrait={draft.edit.height > draft.edit.width} time={viewTime} current={shotHere} selected={selectedShot} actions={brollActions} />}
+
           {tab === "Emojis" && <EmojiPanel edit={draft.edit} lines={lines} time={time} on={draft.options.emojis} behind={behind} actions={emojiActions} />}
 
           {tab === "Effects" && (
@@ -627,7 +678,7 @@ export function ReelEditor({
       </div>
 
       <div className="mt-6">
-        <ReelTimeline edit={draft.edit} lines={lines} windows={windows} time={time} duration={draft.edit.duration} showEmojis={draft.options.emojis && !behind} showZooms={draft.options.zooms} showSounds={draft.options.sfx} onSeek={seek} onPick={pick} />
+        <ReelTimeline edit={draft.edit} lines={lines} windows={windows} broll={brollSpans} time={time} duration={draft.edit.duration} showEmojis={draft.options.emojis && !behind} showZooms={draft.options.zooms} showSounds={draft.options.sfx} onSeek={seek} onPick={pick} />
       </div>
     </div>
   );

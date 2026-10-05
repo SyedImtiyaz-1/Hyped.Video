@@ -21,11 +21,12 @@ import { LookEditor } from "./look-editor";
 import { StylePicker } from "./style-picker";
 import { uploadVideo, type Uploaded, type UploadJob } from "./upload";
 
-const EXTRAS: { key: "emojis" | "zooms" | "sfx" | "hook"; label: string; hint: string }[] = [
+const EXTRAS: { key: "emojis" | "zooms" | "sfx" | "hook" | "broll"; label: string; hint: string }[] = [
   { key: "emojis", label: "Emojis", hint: "One on a line where it fits" },
   { key: "zooms", label: "Zooms", hint: "Punch-ins on the key moments" },
-  { key: "sfx", label: "Sound effects", hint: "Soft hits under your voice. No music." },
+  { key: "sfx", label: "Sound effects", hint: "Soft hits and whooshes under your voice" },
   { key: "hook", label: "Hook title", hint: "A big title for the first 2.5 seconds" },
+  { key: "broll", label: "Stock B-roll", hint: "Short stock clips over your talk where they fit (Pexels)" },
 ];
 
 const CLEANUP: Record<ReelCleanup, { label: string; hint: string }> = {

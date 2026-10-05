@@ -19,7 +19,7 @@ export type EditStyleSpec = {
   label: string;
   hint: string;
   /** What the style sets in the reel's options. */
-  options: { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; cleanup: ReelCleanup };
+  options: { style: ReelStyle; look: ReelLookChanges; fonts: ReelFont[]; emojis: boolean; zooms: boolean; sfx: boolean; hook: boolean; broll: boolean; cleanup: ReelCleanup };
   /** The picture's grade and overlays. */
   picture: Partial<ReelPicture>;
   /** An effect on the jump cuts the cleanup makes (none on light strength). */
@@ -31,7 +31,7 @@ export const EDIT_STYLES: Record<ReelEditStyle, EditStyleSpec> = {
   creator: {
     label: "Creator",
     hint: "Bold captions, emojis, punch-ins and sound effects",
-    options: { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, cleanup: "pauses" },
+    options: { style: "bold", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, broll: true, cleanup: "pauses" },
     picture: {},
     cutEffect: null,
     music: null,
@@ -39,7 +39,7 @@ export const EDIT_STYLES: Record<ReelEditStyle, EditStyleSpec> = {
   clean: {
     label: "Clean",
     hint: "Simple captions and gentle punch-ins, nothing loud",
-    options: { style: "clean", look: {}, fonts: ["classic"], emojis: false, zooms: true, sfx: false, hook: false, cleanup: "pauses" },
+    options: { style: "clean", look: {}, fonts: ["classic"], emojis: false, zooms: true, sfx: false, hook: false, broll: false, cleanup: "pauses" },
     picture: {},
     cutEffect: null,
     music: null,
@@ -47,7 +47,7 @@ export const EDIT_STYLES: Record<ReelEditStyle, EditStyleSpec> = {
   podcast: {
     label: "Podcast",
     hint: "Karaoke captions over a calm music bed, tightly cut",
-    options: { style: "karaoke", look: {}, fonts: ["classic"], emojis: false, zooms: true, sfx: false, hook: true, cleanup: "full" },
+    options: { style: "karaoke", look: {}, fonts: ["classic"], emojis: false, zooms: true, sfx: false, hook: true, broll: true, cleanup: "full" },
     picture: {},
     cutEffect: null,
     music: { track: "calm", volume: 0.35 },
@@ -55,7 +55,7 @@ export const EDIT_STYLES: Record<ReelEditStyle, EditStyleSpec> = {
   hype: {
     label: "Hype",
     hint: "Neon captions, flashes on the cuts and upbeat music",
-    options: { style: "neon", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, cleanup: "full" },
+    options: { style: "neon", look: {}, fonts: ["classic"], emojis: true, zooms: true, sfx: true, hook: true, broll: true, cleanup: "full" },
     picture: { filter: "vivid", strength: 0.8 },
     cutEffect: "flash",
     music: { track: "upbeat", volume: 0.5 },
@@ -63,7 +63,7 @@ export const EDIT_STYLES: Record<ReelEditStyle, EditStyleSpec> = {
   cinematic: {
     label: "Cinematic",
     hint: "Serif captions, a film grade with letterbox, soft dips to black",
-    options: { style: "minimal", look: { font: "dmserif" }, fonts: ["elegant"], emojis: false, zooms: true, sfx: false, hook: false, cleanup: "pauses" },
+    options: { style: "minimal", look: { font: "dmserif" }, fonts: ["elegant"], emojis: false, zooms: true, sfx: false, hook: false, broll: false, cleanup: "pauses" },
     picture: { filter: "cinematic", strength: 1, vignette: true, letterbox: true },
     cutEffect: "blackout",
     music: { track: "calm", volume: 0.4 },
@@ -71,7 +71,7 @@ export const EDIT_STYLES: Record<ReelEditStyle, EditStyleSpec> = {
   behind: {
     label: "Behind you",
     hint: "Huge words behind the speaker, with punch-ins and sounds",
-    options: { style: "behind", look: {}, fonts: ["impact", "classic"], emojis: false, zooms: true, sfx: true, hook: true, cleanup: "pauses" },
+    options: { style: "behind", look: {}, fonts: ["impact", "classic"], emojis: false, zooms: true, sfx: true, hook: true, broll: false, cleanup: "pauses" },
     picture: {},
     cutEffect: null,
     music: null,

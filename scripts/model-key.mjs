@@ -4,6 +4,7 @@
 //
 //   npm run openai-key       (Standard videos and reel captions: platform.openai.com → API keys)
 //   npm run anthropic-key    (Studio videos: console.anthropic.com → API keys)
+//   npm run pexels-key       (stock B-roll in reels: pexels.com/api → Your API key)
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -22,11 +23,18 @@ const PROVIDERS = {
     shape: /^sk-ant-[A-Za-z0-9_-]{20,}$/,
     check: (key) => fetch("https://api.anthropic.com/v1/models", { headers: { "x-api-key": key, "anthropic-version": "2023-06-01" } }),
   },
+  pexels: {
+    name: "PEXELS_API_KEY",
+    label: "Pexels",
+    where: "pexels.com/api → Your API key",
+    shape: /^[A-Za-z0-9]{40,64}$/,
+    check: (key) => fetch("https://api.pexels.com/videos/search?query=office&per_page=1", { headers: { authorization: key } }),
+  },
 };
 
 const provider = PROVIDERS[process.argv[2]];
 if (!provider) {
-  console.log("Usage: node scripts/model-key.mjs openai|anthropic");
+  console.log("Usage: node scripts/model-key.mjs openai|anthropic|pexels");
   process.exit(1);
 }
 
@@ -78,7 +86,7 @@ if (existsSync(devVars)) {
 // Production: straight to Wrangler over stdin.
 const put = spawnSync("npx", ["wrangler", "secret", "put", provider.name], { cwd: new URL("../render/", import.meta.url), input: key, encoding: "utf8" });
 if (put.status !== 0) {
-  console.log(`✗ Couldn't upload it to the render Worker. Run \`npm run secrets\` to retry. (${(put.stderr || "").replace(/sk-[A-Za-z0-9_-]+/g, "[key]").trim().split("\n").pop()})`);
+  console.log(`✗ Couldn't upload it to the render Worker. Run \`npm run secrets\` to retry. (${(put.stderr || "").replaceAll(key, "[key]").replace(/sk-[A-Za-z0-9_-]+/g, "[key]").trim().split("\n").pop()})`);
   process.exit(1);
 }
 console.log(`✓ Live on the render Worker: new videos use it right away.`);
