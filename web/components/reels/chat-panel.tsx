@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 
 export type ChatMessage = { from: "you" | "ai"; text: string; changes?: number; failed?: boolean };
 
-const SUGGESTIONS = ["Make the captions yellow", "Cut the long pauses", "Add calm music under my voice", "Remove all the emojis", "Punch in on every number", "Add a flash when I say the key point"];
+const SUGGESTIONS = ["Yellow captions with a pink highlight", "Two words at a time, a bit higher", "Cut the long pauses", "Add B-roll of a laptop here", "Black and white, but subtle", "A flash on every cut", "Calm music, quieter"];
 
 /**
  * Editing by typing: what the customer asks, and what the assistant changed. Each answer's changes are one step the
@@ -34,7 +34,7 @@ export function ChatPanel({ messages, busy, onSend, onUndo }: { messages: ChatMe
               <Sparkles className="size-3.5" />
               Tell it what to change
             </p>
-            <p className="mt-0.5 text-[13px] text-gray-900">Captions, cuts, emojis, punch-ins, sounds, effects, music, the hook or the look. You can undo each answer.</p>
+            <p className="mt-0.5 text-[13px] text-gray-900">Anything the editor can do: caption words, colours, fonts and size, cuts, emojis, punch-ins, sounds, effects, music, B-roll, the hook or the look. You can undo each answer.</p>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {SUGGESTIONS.map((s) => (
                 <button key={s} type="button" onClick={() => send(s)} disabled={busy} className="h-8 rounded-full border border-gray-alpha-400 px-3 text-[13px] text-gray-1000 hover:bg-gray-alpha-100 disabled:opacity-50">

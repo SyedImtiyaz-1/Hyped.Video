@@ -125,6 +125,12 @@ const RGI_EMOJI = (() => {
   }
 })();
 const graphemes = (s: string) => [...new Intl.Segmenter("en", { granularity: "grapheme" }).segment(s)].length;
+
+/** A word's new text as the captions can show it (1-40 characters the caption fonts can draw), or null. */
+export const cleanWordText = (text: unknown): string | null => {
+  const clean = typeof text === "string" ? text.replace(/\s+/g, " ").trim().slice(0, 40) : "";
+  return clean && DRAWABLE.test(clean) ? clean : null;
+};
 export const isEmoji = (s: string) => (RGI_EMOJI ? RGI_EMOJI.test(s) : /^\p{Extended_Pictographic}/u.test(s) && graphemes(s) === 1);
 
 const MAX_MARKS = 300;

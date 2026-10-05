@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { chatContext, parseChatOps, parseLookChanges, parseReel, parseReelEdit, REEL_FONTS, REEL_MAX_FONTS, REEL_STYLES, reelEditable, type ReelFont, type ReelStyle } from "@launchreel/core";
+import { BROLL_LENGTH, chatContext, longestShot, needsFootage, parseChatOps, parseClip, parseLookChanges, parseReel, parseReelEdit, REEL_FONTS, REEL_MAX_FONTS, REEL_STYLES, reelEditable, sameClip, type BrollClip, type ChatOp, type ReelEdit, type ReelFont, type ReelStyle } from "@launchreel/core";
 import { getDb } from "@/lib/db";
 import { demoJobs, isDemo } from "@/lib/demo";
-import { askAssistant } from "@/lib/reel-assistant";
+import { askAssistant, searchStock } from "@/lib/reel-assistant";
 import { readEdit } from "@/lib/reel-edits";
 import { requireUser } from "@/lib/user";
 
@@ -40,9 +40,37 @@ function allowed(userId: string) {
 }
 
 /**
+ * B-roll the assistant asked for, found: a stock search for each (four at most a message), and its first clip that's
+ * long enough and not in the reel yet attached to the change. A change whose search finds nothing is dropped, and said.
+ */
+async function withFootage(ops: ChatOp[], edit: ReelEdit): Promise<{ ops: ChatOp[]; missing: string[] }> {
+  const used: BrollClip[] = edit.broll.map((s) => s.clip);
+  const portrait = edit.height > edit.width;
+  const out: ChatOp[] = [];
+  const missing: string[] = [];
+  let searches = 0;
+  for (const op of ops) {
+    if (!needsFootage(op)) {
+      out.push(op);
+      continue;
+    }
+    const answer = searches++ < 4 ? await searchStock(op.query, portrait).catch(() => null) : null;
+    const need = op.op === "add_broll" ? (op.length ?? BROLL_LENGTH.default) : BROLL_LENGTH.min;
+    const clip = (answer?.clips ?? []).map((c) => parseClip(c)).find((c): c is BrollClip => c !== null && longestShot(c) >= need && !used.some((u) => sameClip(u, c)));
+    if (!clip) {
+      missing.push(op.query);
+      continue;
+    }
+    used.push(clip);
+    out.push({ ...op, clip });
+  }
+  return { ops: out, missing };
+}
+
+/**
  * A chat edit: the customer's message and their current draft to the assistant (the render Worker's ReelAssistant),
- * and its reply and changes back, checked against the draft (parseChatOps). The editor applies them as one step it can
- * undo; nothing is saved until the customer exports.
+ * and its reply and changes back, checked against the draft (parseChatOps), with stock footage found for any B-roll it
+ * asked for. The editor applies them as one step it can undo; nothing is saved until the customer exports.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -63,9 +91,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   try {
     const answer = await askAssistant(chatContext(draft, parsed.data.time), parsed.data.message);
     if (!answer) return NextResponse.json({ error: "Chat edits aren't available here yet." }, { status: 503 });
-    const ops = parseChatOps(answer.ops, edit);
+    const checked = parseChatOps(answer.ops, edit);
+    const { ops, missing } = checked.some(needsFootage) ? await withFootage(checked, edit) : { ops: checked, missing: [] };
     console.log(`[reel-chat] ${id}: ${ops.length} changes, ${answer.inputTokens}+${answer.outputTokens} tokens`);
-    return NextResponse.json({ reply: answer.reply || (ops.length ? "Done." : "I couldn't make that change."), ops });
+    const reply = answer.reply || (ops.length ? "Done." : "I couldn't make that change.");
+    return NextResponse.json({ reply: missing.length ? `${reply} I couldn't find stock footage for ${missing.map((q) => `"${q}"`).join(", ")}.` : reply, ops });
   } catch (err) {
     console.error(`[reel-chat] ${id}`, err);
     return NextResponse.json({ error: "The assistant didn't answer. Try again in a moment." }, { status: 502 });
