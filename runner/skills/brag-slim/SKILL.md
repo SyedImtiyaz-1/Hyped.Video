@@ -43,7 +43,7 @@ Get the site as a visitor sees it. Many sites build their page with JavaScript, 
 - **Copy:** headline, tagline, section headings, feature names, calls to action, testimonials. Also check the title, meta description and social-preview tags.
 - **Identity:** exact colors from the site's CSS and the fonts it loads.
 - **Visuals:** the logo, product screenshots, hero images, demo videos. Download the ones you'll use into `work/`.
-- **Screenshots:** capture the page at the video's aspect ratio to understand the layout. In the video, reuse the site's real markup, CSS and assets and animate those, rather than panning over flat screenshots.
+- **Screens:** when the brief gives you a capture tool and a camera (`.hyped/capture.mjs`, `.hyped/camera.js`), show the site through them: sharp captures with every element measured, a camera that moves between the real elements, and marks pinned to them. Otherwise reuse the site's real markup, CSS and assets and animate those, rather than panning over flat screenshots.
 - **The product in use:** check the demo videos, how-it-works sections and linked docs for the entry → key action → result flow.
 
 ### Then, for every input
