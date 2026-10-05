@@ -21,7 +21,8 @@ const SECRETS = [
   // render Worker: the model keys, used only by its egress handlers (never inside the container)
   { worker: "render", name: "OPENAI_API_KEY", from: ".env", why: "Standard videos" },
   { worker: "render", name: "ANTHROPIC_API_KEY", from: ".env", why: "Studio videos" },
-  { worker: "render", name: "PEXELS_API_KEY", from: ".env", why: "stock B-roll in reels" },
+  { worker: "render", name: "PEXELS_API_KEY", from: ".env", why: "stock B-roll in reels (Pexels)" },
+  { worker: "render", name: "PIXABAY_API_KEY", from: ".env", why: "stock B-roll in reels (Pixabay)" },
   // web Worker
   // Once a live Clerk key is saved (web/.env.production.local), npm run deploy:web owns CLERK_SECRET_KEY: it uploads the
   // live key together with the live publishable key. So this skips it, and never switches one key without the other.

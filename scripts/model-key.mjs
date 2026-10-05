@@ -5,6 +5,7 @@
 //   npm run openai-key       (Standard videos and reel captions: platform.openai.com → API keys)
 //   npm run anthropic-key    (Studio videos: console.anthropic.com → API keys)
 //   npm run pexels-key       (stock B-roll in reels: pexels.com/api → Your API key)
+//   npm run pixabay-key      (stock B-roll in reels: pixabay.com/api/docs, logged in → the key under Parameters)
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -30,11 +31,19 @@ const PROVIDERS = {
     shape: /^[A-Za-z0-9]{40,64}$/,
     check: (key) => fetch("https://api.pexels.com/videos/search?query=office&per_page=1", { headers: { authorization: key } }),
   },
+  pixabay: {
+    name: "PIXABAY_API_KEY",
+    label: "Pixabay",
+    where: "pixabay.com/api/docs, logged in: the key under Parameters",
+    shape: /^[0-9]{3,12}-[0-9A-Za-z]{16,48}$/,
+    // Pixabay takes the key in the address; the address is never printed.
+    check: (key) => fetch(`https://pixabay.com/api/videos/?key=${encodeURIComponent(key)}&q=office&per_page=3`),
+  },
 };
 
 const provider = PROVIDERS[process.argv[2]];
 if (!provider) {
-  console.log("Usage: node scripts/model-key.mjs openai|anthropic|pexels");
+  console.log("Usage: node scripts/model-key.mjs openai|anthropic|pexels|pixabay");
   process.exit(1);
 }
 

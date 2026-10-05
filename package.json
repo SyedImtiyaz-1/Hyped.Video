@@ -32,6 +32,7 @@
     "music:add": "node scripts/music-add.mjs",
     "openai-key": "node scripts/model-key.mjs openai",
     "anthropic-key": "node scripts/model-key.mjs anthropic",
-    "pexels-key": "node scripts/model-key.mjs pexels"
+    "pexels-key": "node scripts/model-key.mjs pexels",
+    "pixabay-key": "node scripts/model-key.mjs pixabay"
   }
 }

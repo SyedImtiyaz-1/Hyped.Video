@@ -139,9 +139,10 @@ export function ReelEditor({
   // B-roll: each stored shot, when it plays on the cut clock (null when it doesn't: it overlaps the one before, or the
   // end), and how long it may get (to the next shot, the end, or its clip's end); on the recording's clock for the timeline.
   const brollRows = useMemo<BrollRow[]>(() => {
-    const shown = new Map(view.broll.map((v) => [v.clip.id * 1e6 + Math.round(v.at * 1000), v]));
+    const id = (s: BrollShot, at: number) => `${s.clip.source}:${s.clip.id}:${Math.round(at * 1000)}`;
+    const shown = new Map(view.broll.map((v) => [id(v, v.at), v]));
     return draft.edit.broll.map((shot) => {
-      const v = shown.get(shot.clip.id * 1e6 + Math.round(cutAt.toCut(shot.at) * 1000)) ?? null;
+      const v = shown.get(id(shot, cutAt.toCut(shot.at))) ?? null;
       if (!v) return { shot, at: null, length: shot.length, most: shot.length };
       const next = view.broll.find((x) => x.at > v.at);
       return { shot, at: v.at, length: v.length, most: Math.floor(Math.min(longestShot(shot.clip), (next?.at ?? view.duration) - v.at) * 10) / 10 };

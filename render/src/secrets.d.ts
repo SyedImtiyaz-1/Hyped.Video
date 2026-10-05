@@ -8,8 +8,9 @@ interface Env {
   REPO_TOKEN_PRIVATE_KEY: string;
   /** Local development only (render/.dev.vars): lets `next dev` start renders. Never set in production. */
   DEV_START_TOKEN: string;
-  /** Stock B-roll in reels (`npm run pexels-key`). Without it, reels have no B-roll. */
+  /** Stock B-roll in reels: a Pexels key (`npm run pexels-key`) or a Pixabay key (`npm run pixabay-key`). Without either, reels have no B-roll. */
   PEXELS_API_KEY?: string;
+  PIXABAY_API_KEY?: string;
 }
 declare namespace Cloudflare {
   interface Env {
@@ -18,5 +19,6 @@ declare namespace Cloudflare {
     REPO_TOKEN_PRIVATE_KEY: string;
     DEV_START_TOKEN: string;
     PEXELS_API_KEY?: string;
+    PIXABAY_API_KEY?: string;
   }
 }

@@ -26,7 +26,7 @@ import { EMOJI_SIZE, parseReelEdit, ZOOM_AMOUNT, type ReelEdit, type ReelFont, t
 import { emojiShows, HOOK_END, HOOK_SOUND, HOOK_START, punchExpr, soundCues, zoomAim, zoomWindows, type SoundCue, type ZoomWindow } from "@launchreel/core/timeline";
 import { cutClock, onCutTimeline, parseTrims, pauseTrims, trimmedWords, trimTotals, type CutClock, type Trim } from "@launchreel/core/trims";
 import { musicGainDb, REEL_MUSIC, type ReelAudio } from "@launchreel/core/music-beds";
-import { BROLL_FADE, pexelsClip, type BrollShot, type PexelsVideo } from "@launchreel/core/broll";
+import { BROLL_FADE, parseClip, type BrollClip, type BrollShot } from "@launchreel/core/broll";
 import { FACES, type Face, type FaceName } from "./fonts.ts";
 import { bare, endsSentence, master, POWER, round, srtCues, STOP, strongestWord, WEAK, type Group, type PhraseLimits, type Word } from "./media.ts";
 
@@ -550,26 +550,25 @@ async function llmPlan(groups: Group[], duration: number, options: ReelOptions, 
   return plan;
 }
 
-// Pexels allows 200 searches an hour on a free key (unlimited once they've approved the app's attribution), so a reel
-// asks for at most this many shots, and stops searching when Pexels says it's busy.
+// The libraries' rate limits are shared by every reel (Pexels: 200 searches an hour on a free key; Pixabay: 100 a
+// minute), so a reel asks for at most this many shots, and stops searching when the library says it's busy.
 const BROLL_AUTO_SHOTS = 12;
 const BROLL_SEARCHES = 16;
 
 /**
  * Stock B-roll for the lines the planner gave a search: on the cut clock, at least 3 seconds after the previous shot
  * (and clear of the hook), about one per 7 seconds at medium strength (12 at most), each about as long as its line
- * (2.2-3.5 s), never over a punch-in (it would hide it), with the first Pexels clip long enough that the reel doesn't
- * use yet. Pexels is reached through the render
- * Worker (PEXELS_BASE_URL adds the key there); on a laptop, with PEXELS_API_KEY. No access, or no clip found: no
+ * (2.2-3.5 s), never over a punch-in (it would hide it), with the best clip long enough that the reel doesn't use yet.
+ * Searches go to the render Worker (BROLL_SEARCH_URL), which holds the library's key. No access, or no clip found: no
  * B-roll, nothing else changes.
  */
 async function findBroll(plan: Plan, lines: CaptionLine[], cutAt: CutClock, portrait: boolean, density: number): Promise<BrollShot[]> {
-  const base = process.env.PEXELS_BASE_URL ?? (process.env.PEXELS_API_KEY ? "https://api.pexels.com" : null);
+  const base = process.env.BROLL_SEARCH_URL;
   if (!base) return [];
-  const max = Math.min(BROLL_AUTO_SHOTS, Math.max(1, Math.round((cutAt.duration / 10) * density)));
+  const max = Math.min(BROLL_AUTO_SHOTS, Math.max(1, Math.round((cutAt.duration / 7) * density)));
   const shots: BrollShot[] = [];
-  const used = new Set<number>();
-  const found = new Map<string, PexelsVideo[]>();
+  const used = new Set<string>();
+  const found = new Map<string, BrollClip[]>();
   let searches = 0;
   let free = 2.5;
   for (let gi = 0; gi < lines.length && shots.length < max; gi++) {
@@ -582,17 +581,14 @@ async function findBroll(plan: Plan, lines: CaptionLine[], cutAt: CutClock, port
     if (!found.has(key)) {
       if (searches >= BROLL_SEARCHES) break;
       searches++;
-      const videos = await searchVideos(base, query, portrait).catch((err: Error) => err);
-      if (videos instanceof Error) {
-        log(`B-roll search "${query}" failed (${redact(videos.message).slice(0, 160)})`);
-        if (/\((401|403|429)\)/.test(videos.message)) break; // no key, a bad key, or Pexels' hourly limit: no more searches for this reel
-        continue;
-      }
-      found.set(key, videos);
+      const answer = await searchStock(base, query, portrait);
+      if (answer.error) log(`B-roll search "${query}": ${redact(answer.error).slice(0, 160)}`);
+      if (answer.status === 429 || answer.status === 503) break; // the library's limit, or no key: no more searches for this reel
+      found.set(key, answer.clips);
     }
-    const clip = (found.get(key) ?? []).map((v) => (v.duration >= length + 0.5 && !used.has(v.id) ? pexelsClip(v) : null)).find((c) => c) ?? null;
+    const clip = (found.get(key) ?? []).find((c) => c.duration >= length + 0.5 && !used.has(`${c.source}:${c.id}`)) ?? null;
     if (!clip) continue;
-    used.add(clip.id);
+    used.add(`${clip.source}:${clip.id}`);
     shots.push({ at: cutAt.toUpload(start), length: Math.round(length * 100) / 100, query, clip });
     free = start + length + 3;
   }
@@ -600,19 +596,20 @@ async function findBroll(plan: Plan, lines: CaptionLine[], cutAt: CutClock, port
   return shots;
 }
 
-/** Pexels' videos for a search, in the reel's orientation. Retried once when the network or Pexels fails, never when it's busy (429). */
-async function searchVideos(base: string, query: string, portrait: boolean): Promise<PexelsVideo[]> {
-  const url = `${base.replace(/\/$/, "")}/videos/search?${new URLSearchParams({ query, orientation: portrait ? "portrait" : "landscape", per_page: "10", size: "medium" })}`;
-  const headers: Record<string, string> = process.env.PEXELS_BASE_URL ? {} : { authorization: process.env.PEXELS_API_KEY ?? "" };
+/** Clips for a search, from the render Worker (checked again here). Asked twice when the network or the Worker fails. */
+async function searchStock(base: string, query: string, portrait: boolean): Promise<{ clips: BrollClip[]; error?: string; status?: number }> {
+  const url = `${base}?${new URLSearchParams({ query, portrait: portrait ? "1" : "0" })}`;
   for (let attempt = 1; ; attempt++) {
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) }).catch((err: Error) => err);
-    if (res instanceof Error || res.status >= 500) {
-      if (attempt >= 2) throw new Error(res instanceof Error ? res.message : `search failed (${res.status})`);
-      await new Promise((r) => setTimeout(r, 2000));
-      continue;
+    const res = await fetch(url, { signal: AbortSignal.timeout(25_000) }).catch((err: Error) => err);
+    if (res instanceof Error || !res.ok) {
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      return { clips: [], error: res instanceof Error ? res.message : `the search failed (${res.status})`, status: 502 };
     }
-    if (!res.ok) throw new Error(`search failed (${res.status})`);
-    return ((await res.json()) as { videos?: PexelsVideo[] }).videos ?? [];
+    const body = (await res.json().catch(() => ({}))) as { clips?: unknown[]; error?: string; status?: number };
+    return { clips: (body.clips ?? []).map((c) => parseClip(c)).filter((c): c is BrollClip => c !== null), error: body.error, status: body.status };
   }
 }
 

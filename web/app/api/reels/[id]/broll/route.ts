@@ -8,7 +8,7 @@ import { requireUser } from "@/lib/user";
 
 const Body = z.object({ query: z.string().trim().min(2).max(80), portrait: z.boolean() });
 
-// Searches are free, but Pexels allows the whole app 200 an hour: per person, in each Worker instance (best effort).
+// Searches are free, but the libraries' rate limits are shared by the whole app: per person, in each Worker instance (best effort).
 const WINDOW_MS = 10 * 60_000;
 const PER_WINDOW = 20;
 const recent = new Map<string, number[]>();
@@ -20,7 +20,7 @@ function allowed(userId: string) {
   return true;
 }
 
-/** Stock B-roll for the editor: Pexels clips for a search, through the render Worker (it holds the key). */
+/** Stock B-roll for the editor: clips for a search, through the render Worker (it holds the library's key, and caches searches a day). */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await requireUser();

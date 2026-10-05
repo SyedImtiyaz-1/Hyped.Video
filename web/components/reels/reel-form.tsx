@@ -26,7 +26,7 @@ const EXTRAS: { key: "emojis" | "zooms" | "sfx" | "hook" | "broll"; label: strin
   { key: "zooms", label: "Zooms", hint: "Punch-ins on the key moments" },
   { key: "sfx", label: "Sound effects", hint: "Soft hits and whooshes under your voice" },
   { key: "hook", label: "Hook title", hint: "A big title for the first 2.5 seconds" },
-  { key: "broll", label: "Stock B-roll", hint: "Short stock clips over your talk where they fit (Pexels)" },
+  { key: "broll", label: "Stock B-roll", hint: "Short stock clips over your talk where they fit" },
 ];
 
 const CLEANUP: Record<ReelCleanup, { label: string; hint: string }> = {

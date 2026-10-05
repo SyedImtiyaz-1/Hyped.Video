@@ -27,9 +27,12 @@ import {
   REEL_PLAN_MODEL,
   CHAT_SCHEMA,
   CHAT_SYSTEM,
-  pexelsClip,
+  BROLL_SOURCES,
+  parseClip,
+  stockClips,
+  stockSearchUrl,
   type BrollClip,
-  type PexelsVideo,
+  type BrollSource,
   REEL_UPLOAD_TYPES,
   reelSecondsFor,
   type Engine,
@@ -54,8 +57,9 @@ const ANTHROPIC_HOST = "anthropic.internal";
 const OPENAI_HOST = "openai.internal";
 // Word timings for voiceover captions: speech recognition on Workers AI, so the audio never leaves Cloudflare.
 const TIMINGS_HOST = "timings.internal";
-// Stock B-roll searches for reels: Pexels' API, with this Worker's key added (the footage itself is on public URLs).
-const PEXELS_HOST = "pexels.internal";
+// Stock B-roll searches for reels: answered here (searchBroll, with this Worker's key and cache); the footage itself
+// downloads from the library's public URLs.
+const BROLL_HOST = "broll.internal";
 
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -113,7 +117,10 @@ VideoSandbox.outboundByHost = {
       h.delete("x-api-key");
     }),
   [TIMINGS_HOST]: (request: Request, env: Env) => wordTimings(request, env),
-  [PEXELS_HOST]: (request: Request, env: Env) => forward(request, "https://api.pexels.com", env.PEXELS_API_KEY, "PEXELS_API_KEY", (h, key) => h.set("authorization", key)),
+  [BROLL_HOST]: async (request: Request, env: Env) => {
+    const url = new URL(request.url);
+    return Response.json(await searchBroll(env, { query: url.searchParams.get("query") ?? "", portrait: url.searchParams.get("portrait") === "1" }));
+  },
 };
 
 /** A job to run, or (`export`) a re-export of an edited reel: its revision, in Job.reel.export. */
@@ -427,8 +434,8 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
             OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`,
             OPENAI_API_KEY: "added-by-worker",
             HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`,
-            // Stock B-roll searches; the footage downloads from Pexels' public URLs.
-            PEXELS_BASE_URL: `http://${PEXELS_HOST}`,
+            // Stock B-roll searches; the footage downloads from the library's public URLs.
+            BROLL_SEARCH_URL: `http://${BROLL_HOST}/search`,
             PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
           },
         });
@@ -566,7 +573,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         await sandbox.startProcess("runuser -u agent -- node /app/dist/reel.mjs", {
           processId,
           cwd: "/workspace",
-          env: { HOME: "/home/agent", JOB_ROOT: "/workspace", OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`, OPENAI_API_KEY: "added-by-worker", HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`, PEXELS_BASE_URL: `http://${PEXELS_HOST}`, PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright" },
+          env: { HOME: "/home/agent", JOB_ROOT: "/workspace", OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`, OPENAI_API_KEY: "added-by-worker", HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`, BROLL_SEARCH_URL: `http://${BROLL_HOST}/search`, PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright" },
         });
       });
 
@@ -769,21 +776,44 @@ async function reelChat(env: Env, input: ReelChatInput): Promise<ReelChatResult>
   return { reply: String(parsed.reply ?? "").slice(0, 600), ops: Array.isArray(parsed.ops) ? parsed.ops : [], inputTokens: body.usage?.prompt_tokens ?? 0, outputTokens: body.usage?.completion_tokens ?? 0 };
 }
 
-/** Stock footage for a search: clips, or why there are none (`status`: 503 not set up, 429 Pexels' hourly limit, 502 Pexels failed). */
+/** Stock footage for a search: clips, or why there are none (`status`: 503 not set up, 429 the library's rate limit, 502 it failed). */
 export type BrollSearch = { clips: BrollClip[]; error?: string; status?: 429 | 502 | 503 };
 
-/** Stock footage for a search, as clips (Pexels, in the reel's orientation, at least 3 seconds long). */
+// Searches are kept a day: Pixabay asks for it, and it spares both libraries' rate limits. In the bucket under
+// cache/, which serveMedia never serves.
+const BROLL_CACHE_MS = 24 * 3600 * 1000;
+
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Stock footage for a search, as clips for the reel's orientation (at least 3 seconds long, the best fits first), from
+ * the library this Worker has a key for: Pexels first (it searches by orientation), else Pixabay. The editor and the
+ * runner both search here, so the keys stay in this Worker.
+ */
 async function searchBroll(env: Env, input: { query: string; portrait: boolean }): Promise<BrollSearch> {
-  if (!env.PEXELS_API_KEY) return { clips: [], error: "Stock B-roll isn't set up yet.", status: 503 };
-  const query = String(input.query ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+  const source: BrollSource | null = env.PEXELS_API_KEY ? "pexels" : env.PIXABAY_API_KEY ? "pixabay" : null;
+  if (!source) return { clips: [], error: "Stock B-roll isn't set up yet.", status: 503 };
+  const query = String(input.query ?? "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 80);
   if (!query) return { clips: [] };
-  const url = `https://api.pexels.com/videos/search?${new URLSearchParams({ query, orientation: input.portrait ? "portrait" : "landscape", per_page: "15", size: "medium" })}`;
-  const res = await fetch(url, { headers: { authorization: env.PEXELS_API_KEY }, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+  const cacheKey = `cache/broll/${source}/${input.portrait ? "portrait" : "landscape"}/${await sha256(query)}.json`;
+  const cached = await env.VIDEOS.get(cacheKey).catch(() => null);
+  if (cached && Date.now() - cached.uploaded.getTime() < BROLL_CACHE_MS) {
+    const clips = ((await cached.json().catch(() => [])) as unknown[]).map((c) => parseClip(c)).filter((c): c is BrollClip => c !== null);
+    return { clips };
+  }
+  const url = stockSearchUrl(source, query, input.portrait);
+  const res = await fetch(source === "pixabay" ? `${url}&key=${encodeURIComponent(env.PIXABAY_API_KEY ?? "")}` : url, {
+    headers: source === "pexels" ? { authorization: env.PEXELS_API_KEY ?? "" } : {},
+    signal: AbortSignal.timeout(15_000),
+  }).catch(() => null);
   if (res?.status === 429) return { clips: [], error: "Stock search is busy right now. Try again in a few minutes.", status: 429 };
-  if (!res?.ok) return { clips: [], error: `Pexels didn't answer (${res?.status ?? "no answer"})`, status: 502 };
-  const body = (await res.json()) as { videos?: PexelsVideo[] };
-  const clips = (body.videos ?? []).filter((v) => v.duration >= 3).map((v) => pexelsClip(v)).filter((c): c is BrollClip => c !== null);
-  return { clips: clips.slice(0, 12) };
+  if (!res?.ok) return { clips: [], error: `${BROLL_SOURCES[source].label} didn't answer (${res?.status ?? "no answer"})`, status: 502 };
+  const clips = stockClips(source, await res.json().catch(() => null), input.portrait);
+  await env.VIDEOS.put(cacheKey, JSON.stringify(clips), { httpMetadata: { contentType: "application/json" } }).catch(() => {});
+  return { clips };
 }
 
 /**

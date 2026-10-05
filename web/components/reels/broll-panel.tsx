@@ -1,7 +1,7 @@
 "use client";
 import { Clapperboard, LoaderCircle, Plus, Repeat2, Search, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { BROLL_LENGTH, longestShot, type BrollClip, type BrollShot } from "@launchreel/core/broll";
+import { BROLL_LENGTH, BROLL_SOURCES, longestShot, sameClip, type BrollClip, type BrollShot } from "@launchreel/core/broll";
 import { cn } from "@/lib/cn";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
@@ -25,9 +25,10 @@ export type BrollRow = { shot: BrollShot; at: number | null; length: number; mos
 type Searching = { mode: "add" } | { mode: "swap"; index: number };
 
 /**
- * Stock B-roll: short Pexels clips that play over the speaker while they keep talking (the voice and the captions carry
- * on). Every shot can be swapped for another clip, made longer or shorter, or removed; a new one goes in at the playhead.
- * Searches go through the server (it holds the Pexels key). Pexels and each videographer are credited here.
+ * Stock B-roll: short clips from a free library (Pixabay or Pexels) that play over the speaker while they keep talking
+ * (the voice and the captions carry on). Every shot can be swapped for another clip, made longer or shorter, or removed;
+ * a new one goes in at the playhead. Searches go through the server (it holds the library's key). The library and each
+ * videographer are credited here, as the libraries ask.
  */
 export function BrollPanel({ jobId, rows, portrait, time, current, selected, actions }: { jobId: string; rows: BrollRow[]; portrait: boolean; time: number; current: number; selected: number | null; actions: BrollActions }) {
   const [searching, setSearching] = useState<Searching | null>(null);
@@ -150,17 +151,17 @@ export function BrollPanel({ jobId, rows, portrait, time, current, selected, act
               <div className={cn("mt-3 grid gap-1.5", portrait ? "grid-cols-3 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3")}>
                 {results.map((clip) => {
                   const short = longestShot(clip) < BROLL_LENGTH.min;
-                  const same = swapping?.clip.id === clip.id;
+                  const same = swapping ? sameClip(swapping.clip, clip) : false;
                   return (
                     <button
-                      key={clip.id}
+                      key={`${clip.source}-${clip.id}`}
                       type="button"
                       disabled={short || same}
                       onClick={() => pick(clip)}
-                      title={short ? "Too short to use" : `By ${clip.author || "a Pexels videographer"}`}
+                      title={short ? "Too short to use" : `By ${clip.author || `a ${BROLL_SOURCES[clip.source].label} videographer`}`}
                       className={cn("group relative overflow-hidden rounded-md bg-gray-alpha-200 outline-none ring-gray-1000 focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50", portrait ? "aspect-[9/16]" : "aspect-video", same && "ring-2")}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element -- Pexels' own still, sized by Pexels */}
+                      {/* eslint-disable-next-line @next/next/no-img-element -- the library's own still, sized by the library */}
                       <img src={clip.image} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover transition-transform group-hover:scale-105" />
                       <span className="absolute bottom-1 right-1 rounded bg-black/65 px-1 text-[10px] tabular-nums text-white">{Math.round(clip.duration)} s</span>
                       {same && <span className="absolute left-1 top-1 rounded bg-black/65 px-1 text-[10px] text-white">Now</span>}
@@ -170,8 +171,8 @@ export function BrollPanel({ jobId, rows, portrait, time, current, selected, act
               </div>
               <p className="mt-2 text-[11px] text-gray-900">
                 Videos from{" "}
-                <a href="https://www.pexels.com" target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                  Pexels
+                <a href={BROLL_SOURCES[results[0].source].home} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                  {BROLL_SOURCES[results[0].source].label}
                 </a>
                 . Pick one to {swapping ? "swap it in" : "lay it at the playhead"}.
               </p>
@@ -186,9 +187,9 @@ export function BrollPanel({ jobId, rows, portrait, time, current, selected, act
           {rows.map((row, i) => {
             const { shot } = row;
             return (
-              <li key={`${shot.clip.id}-${shot.at}`} className={cn("flex gap-2.5 rounded-lg border border-gray-alpha-400 p-2", (i === selected || i === current) && "bg-gray-alpha-100 ring-1 ring-gray-alpha-400")}>
+              <li key={`${shot.clip.source}-${shot.clip.id}-${shot.at}`} className={cn("flex gap-2.5 rounded-lg border border-gray-alpha-400 p-2", (i === selected || i === current) && "bg-gray-alpha-100 ring-1 ring-gray-alpha-400")}>
                 <button type="button" onClick={() => actions.select(i)} className={cn("relative shrink-0 overflow-hidden rounded bg-gray-alpha-200", portrait ? "h-16 w-9" : "h-9 w-16")} aria-label={`Go to the shot at ${clock(row.at ?? 0)}`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element -- Pexels' own still */}
+                  {/* eslint-disable-next-line @next/next/no-img-element -- the library's own still */}
                   <img src={shot.clip.image} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
                 </button>
                 <div className="min-w-0 flex-1">
@@ -216,7 +217,7 @@ export function BrollPanel({ jobId, rows, portrait, time, current, selected, act
                   )}
                   <p className="mt-1 truncate text-[11px] text-gray-900">
                     <a href={shot.clip.page} target="_blank" rel="noreferrer" className="hover:underline">
-                      {shot.clip.author ? `${shot.clip.author} on Pexels` : "On Pexels"}
+                      {shot.clip.author ? `${shot.clip.author} on ${BROLL_SOURCES[shot.clip.source].label}` : `On ${BROLL_SOURCES[shot.clip.source].label}`}
                     </a>
                   </p>
                 </div>
