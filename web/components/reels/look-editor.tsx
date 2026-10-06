@@ -1,7 +1,7 @@
 "use client";
 import { ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 import type { ReactNode } from "react";
-import { CAPTION_FONTS, CAPTION_OFFSET, resolveLook, type CaptionAnimation, type CaptionPosition, type ReelLookChanges, type ReelStyle } from "@launchreel/core/captions";
+import { CAPTION_FONTS, CAPTION_OFFSET, CAPTION_STROKES, resolveLook, type CaptionAnimation, type CaptionPosition, type ReelLookChanges, type ReelStyle } from "@launchreel/core/captions";
 import type { ReelFont } from "@launchreel/core/reel";
 import { cn } from "@/lib/cn";
 import { CAPTION_FONT_CLASS, CAPTION_FONT_LABEL } from "./caption-fonts";
@@ -16,11 +16,32 @@ const SIZES: [string, number][] = [
   ["XL", 1.4],
 ];
 const WORDS = [1, 2, 3, 4, 6];
-const ANIMATIONS: [string, CaptionAnimation][] = [
-  ["Pop", "pop"],
-  ["Fade", "fade"],
-  ["None", "none"],
+const ANIMATIONS: [string, CaptionAnimation, string][] = [
+  ["Pop", "pop", "The spoken word swells and settles"],
+  ["Bounce", "bounce", "The spoken word springs up and back"],
+  ["Stomp", "stomp", "The spoken word slams down from big"],
+  ["Rise", "rise", "The spoken word grows up from its line"],
+  ["Typewriter", "typewriter", "Words type in, letter by letter, as they're said"],
+  ["Reveal", "reveal", "Words appear as they're said"],
+  ["Fade", "fade", "Each line fades in"],
+  ["None", "none", "No animation"],
 ];
+const BACKS: [string, NonNullable<ReelLookChanges["back"]>][] = [
+  ["None", "none"],
+  ["Spoken word", "word"],
+  ["Whole line", "line"],
+];
+const STROKES: [string, NonNullable<ReelLookChanges["stroke"]>][] = [
+  ["None", "none"],
+  ["Thin", "thin"],
+  ["Thick", "thick"],
+];
+const SHADOWS: [string, NonNullable<ReelLookChanges["shadow"]>][] = [
+  ["None", "none"],
+  ["Soft", "soft"],
+  ["Hard", "hard"],
+];
+const STROKE_COLORS = ["#000000", "#FFFFFF", "#FFD60A", "#FF4FD8"];
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -78,7 +99,8 @@ function Swatches({ label, value, options, onChange }: { label: string; value: s
 
 /**
  * Customizing a caption style: a live preview of the reel's captions on the sample frame, then font, colours, size,
- * position, words on screen, animation and capitals. Everything left alone stays the style's own.
+ * position, words on screen, animation, a box behind the words, stroke, shadow, bigger key words and capitals.
+ * Everything left alone stays the style's own.
  */
 export function LookEditor({ style, changes, onChange, fonts, showPreview = true }: { style: ReelStyle; changes: ReelLookChanges; onChange: (update: (changes: ReelLookChanges) => ReelLookChanges) => void; fonts: ReelFont[]; showPreview?: boolean }) {
   const tick = useTick();
@@ -87,6 +109,11 @@ export function LookEditor({ style, changes, onChange, fonts, showPreview = true
   // dropped, so "Reset" only shows when something differs.
   const set = (patch: ReelLookChanges) => onChange((current) => Object.fromEntries(Object.entries({ ...current, ...patch }).filter(([, v]) => v !== undefined)) as ReelLookChanges);
   const highlight = look.background === "band" ? look.backgroundColor : look.accent;
+  // What the style does now, for the controls that start from it: what's behind the words, the stroke and the shadow.
+  const strokes = CAPTION_STROKES[style];
+  const back = look.background === "band" ? "word" : look.background === "box" ? "line" : "none";
+  const strokeNow = changes.stroke ?? (look.stroke === "none" || strokes.outline === 0 ? "none" : look.stroke === "soft" || strokes.outline <= 0.08 ? "thin" : "thick");
+  const shadowNow = changes.shadow ?? (look.stroke === "soft" ? "soft" : look.hardShadow || (strokes.shadow > 0 && strokes.back < 0x80) ? "hard" : "none");
   // Captions at the top would meet "Behind you"'s big words.
   const positions: [string, CaptionPosition][] = style === "behind" ? [["Middle", "middle"], ["Bottom", "bottom"]] : [["Top", "top"], ["Middle", "middle"], ["Bottom", "bottom"]];
   return (
@@ -123,7 +150,7 @@ export function LookEditor({ style, changes, onChange, fonts, showPreview = true
           <Field label="Text colour">
             <Swatches label="Text colour" value={look.color} options={TEXT_COLORS} onChange={(color) => set({ color })} />
           </Field>
-          <Field label={style === "highlight" ? "Marker colour" : "Highlight colour"}>
+          <Field label={look.background === "band" ? "Box colour" : "Highlight colour"}>
             <Swatches label="Highlight colour" value={highlight} options={HIGHLIGHTS} onChange={(accent) => set({ accent })} />
           </Field>
         </div>
@@ -156,19 +183,55 @@ export function LookEditor({ style, changes, onChange, fonts, showPreview = true
             <span className="text-xs text-gray-900">{changes.offset ? `${changes.offset < 0 ? "Up" : "Down"} ${Math.round(Math.abs(changes.offset) * 100)}%` : "Or drag the captions on the video"}</span>
           </div>
         </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Words on screen">
-            <Segmented label="Words on screen" options={WORDS.map((n) => [String(n), n] as [string, number])} value={look.words} onChange={(words) => set({ words })} />
+        <Field label="Words on screen">
+          <Segmented label="Words on screen" options={WORDS.map((n) => [String(n), n] as [string, number])} value={look.words} onChange={(words) => set({ words })} />
+        </Field>
+        <Field label="Animation">
+          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Animation">
+            {ANIMATIONS.map(([name, animation, hint]) => (
+              <button
+                key={animation}
+                type="button"
+                role="radio"
+                aria-checked={look.animation === animation}
+                title={hint}
+                onClick={() => set({ animation })}
+                className={cn("h-8 rounded-md border px-2.5 text-[13px] transition-colors", look.animation === animation ? "border-gray-1000 bg-gray-alpha-200 font-medium text-gray-1000" : "border-gray-alpha-400 text-gray-1000 hover:border-gray-alpha-500")}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </Field>
+        {style !== "behind" && (
+          <Field label="Box behind">
+            <Segmented label="Box behind" options={BACKS} value={back} onChange={(value) => set({ back: value })} />
           </Field>
-          <Field label="Animation">
-            <Segmented label="Animation" options={ANIMATIONS} value={look.animation} onChange={(animation) => set({ animation })} />
+        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Stroke">
+            <Segmented label="Stroke" options={STROKES} value={strokeNow} onChange={(stroke) => set({ stroke })} />
+          </Field>
+          <Field label="Shadow">
+            <Segmented label="Shadow" options={SHADOWS} value={shadowNow} onChange={(shadow) => set({ shadow })} />
           </Field>
         </div>
+        {strokeNow !== "none" && (
+          <Field label="Stroke colour">
+            <Swatches label="Stroke colour" value={look.strokeColor ?? "#000000"} options={STROKE_COLORS} onChange={(strokeColor) => set({ strokeColor: strokeColor === "#000000" ? undefined : strokeColor })} />
+          </Field>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-1000">
-            <input type="checkbox" checked={look.casing === "upper"} onChange={(e) => set({ caps: e.target.checked })} className="size-4 accent-[var(--ds-gray-1000)]" />
-            All capitals
-          </label>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-1000">
+              <input type="checkbox" checked={look.casing === "upper"} onChange={(e) => set({ caps: e.target.checked })} className="size-4 accent-[var(--ds-gray-1000)]" />
+              All capitals
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-1000">
+              <input type="checkbox" checked={look.keyScale > 1} onChange={(e) => set({ bigKeys: e.target.checked || undefined })} className="size-4 accent-[var(--ds-gray-1000)]" />
+              Bigger key words
+            </label>
+          </div>
           {Object.keys(changes).length > 0 && (
             <button type="button" onClick={() => onChange(() => ({}))} className="flex items-center gap-1.5 text-[13px] text-gray-900 hover:text-gray-1000">
               <RotateCcw className="size-3.5" />

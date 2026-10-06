@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import type { JobResult } from "@launchreel/core/contract";
 import { llmCostUsd, VOICE_TIMINGS_USD_PER_MINUTE, type TokenUsage } from "@launchreel/core/pricing";
-import { CAPTION_STROKES, captionLimits, captionLines, captionPlace, captionWidth, captionY, cueOf, resolveLook, type CaptionFont, type CaptionLine, type CaptionLook, type ReelLookChanges } from "@launchreel/core/captions";
+import { boxAlpha, CAPTION_STROKES, captionLimits, captionLines, captionPlace, captionWidth, captionY, cueOf, resolveLook, REVEALING_ANIMATIONS, SHADOW, TYPEWRITER_LETTER, weightOf, WEIGHTED_FONTS, wordMotion, type CaptionFont, type CaptionLine, type CaptionLook, type CaptionWeight, type ReelLookChanges } from "@launchreel/core/captions";
 import { channelExpr, channelSteps, EFFECTS, enableExpr, type PlacedEffect } from "@launchreel/core/effects";
 import { EDIT_STYLES, STRENGTH_CUT_GAP, STRENGTH_DENSITY, STRENGTH_ZOOM } from "@launchreel/core/edit-styles";
 import { GRAIN, gradeMatrix, LETTERBOX, parsePicture, VHS, VIGNETTE, type ReelPicture } from "@launchreel/core/picture";
@@ -702,12 +702,26 @@ function lookFor(style: ReelStyle, changes: ReelLookChanges | undefined): Look {
   return { ...look, style, limits: captionLimits(style, look) };
 }
 
-// Inter comes in the look's weight; the display fonts have one face each (runner/fonts).
-const INTER_FACES = { black: "Inter Black", extrabold: "Inter Extra Bold", semibold: "Inter Semi Bold", medium: "Inter Medium" } as const;
-const DISPLAY_FACES: Record<Exclude<CaptionFont, "inter">, FaceName> = { anton: "Anton", abril: "Abril Fatface", archivo: "Archivo Black", dmserif: "DM Serif Display", kaushan: "Kaushan Script", marker: "Permanent Marker" };
-const faceOf = (look: CaptionLook): Face => FACES[look.font === "inter" ? INTER_FACES[look.weight] : DISPLAY_FACES[look.font]];
-/** The face for a key word: Inter Extra Bold in the light Inter styles (clean, minimal), else the look's own. */
-const keyFaceOf = (look: CaptionLook): Face => (look.font === "inter" && (look.weight === "semibold" || look.weight === "medium") ? FACES["Inter Extra Bold"] : faceOf(look));
+// Inter and Montserrat come in the look's weight; the display fonts have one face each (runner/fonts).
+const WEIGHTED_FACES: Record<"inter" | "montserrat", Partial<Record<CaptionWeight, FaceName>>> = {
+  inter: { black: "Inter Black", extrabold: "Inter Extra Bold", semibold: "Inter Semi Bold", medium: "Inter Medium" },
+  montserrat: { black: "Montserrat Black", extrabold: "Montserrat ExtraBold", semibold: "Montserrat SemiBold", medium: "Montserrat Medium", light: "Montserrat Light" },
+};
+const DISPLAY_FACES: Record<Exclude<CaptionFont, "inter" | "montserrat">, FaceName> = {
+  anton: "Anton", abril: "Abril Fatface", archivo: "Archivo Black", dmserif: "DM Serif Display", kaushan: "Kaushan Script", marker: "Permanent Marker",
+  poppins: "Poppins ExtraBold", tiktok: "TikTok Sans", roboto: "Roboto Black", rubik: "Rubik Black", bebas: "Bebas Neue", oswald: "Oswald",
+  bangers: "Bangers", luckiest: "Luckiest Guy", instrument: "Instrument Serif", caveat: "Caveat",
+};
+/** A font's face in a weight (the nearest it has, for Inter and Montserrat; the one face, for the others). */
+const faceIn = (font: CaptionFont, weight: CaptionWeight): Face => {
+  const w = weightOf(font, weight);
+  return FACES[w && (font === "inter" || font === "montserrat") ? WEIGHTED_FACES[font][w]! : DISPLAY_FACES[font as keyof typeof DISPLAY_FACES]];
+};
+const faceOf = (look: CaptionLook): Face => faceIn(look.font, look.weight);
+/** The face for a key word: the extra-bold weight in the light weighted styles (clean, minimal, glide), else the look's own. */
+const keyFaceOf = (look: CaptionLook): Face => (WEIGHTED_FONTS[look.font] && ["semibold", "medium", "light"].includes(look.weight) ? faceIn(look.font, "extrabold") : faceOf(look));
+/** The spoken word's face when it turns bold (Glide): the font's extra-bold weight, where it has weights. */
+const boldFaceOf = (look: CaptionLook): Face => (WEIGHTED_FONTS[look.font] ? faceIn(look.font, "extrabold") : faceOf(look));
 
 /** Text in a face at ASS size `size`: its advance width in pixels (what libass centres). Kerning is left out. */
 function advance(face: Face, text: string, size: number) {
@@ -747,15 +761,28 @@ function shown(word: string, look: CaptionLook) {
 
 /** Splits a caption into one or two balanced lines that fit `max` wide, shrinking the text if a word alone is wider. */
 function lineBreak(words: string[], face: Face, size: number, max: number): { lines: string[][]; scale: number } {
-  const width = (ws: string[]) => advance(face, ws.join(" "), size);
-  if (words.length < 2 || width(words) <= max) return { lines: [words], scale: Math.min(1, max / width(words)) };
-  let best = { lines: [words], widest: Infinity };
-  for (let k = 1; k < words.length; k++) {
-    const widest = Math.max(width(words.slice(0, k)), width(words.slice(k)));
-    if (widest < best.widest) best = { lines: [words.slice(0, k), words.slice(k)], widest };
-  }
-  return { lines: best.lines, scale: Math.min(1, max / best.widest) };
+  return lineBreakBy(words, (i) => advance(face, words[i], size), advance(face, " ", size), max);
 }
+
+/** lineBreak, from each word's own width (words in other faces or sizes) and a space's. */
+function lineBreakBy(words: string[], widthOf: (i: number) => number, space: number, max: number): { lines: string[][]; scale: number } {
+  const width = (from: number, to: number) => {
+    let w = 0;
+    for (let i = from; i < to; i++) w += widthOf(i) + (i > from ? space : 0);
+    return w;
+  };
+  const all = width(0, words.length);
+  if (words.length < 2 || all <= max) return { lines: [words], scale: Math.min(1, max / all) };
+  let best = { k: 1, widest: Infinity };
+  for (let k = 1; k < words.length; k++) {
+    const widest = Math.max(width(0, k), width(k, words.length));
+    if (widest < best.widest) best = { k, widest };
+  }
+  return { lines: [words.slice(0, best.k), words.slice(best.k)], scale: Math.min(1, max / best.widest) };
+}
+
+/** An ASS alpha (00 opaque, FF clear) as a tag value. */
+const hexAlpha = (alpha: number) => `&H${alpha.toString(16).padStart(2, "0").toUpperCase()}&`;
 
 /** An ASS drawing of a rounded rectangle, absolute pixels (draw with \an7\pos(0,0)\p1). */
 function roundedRect(x0: number, y0: number, x1: number, y1: number, r: number) {
@@ -820,9 +847,10 @@ function placeCaptions(look: CaptionLook, frame: Frame, spec: ReelSpec, markSize
 
 /**
  * The captions, hook title and watermark as one ASS file for libass, and where each emoji goes, for any caption style.
- * Every word change is its own event, so the spoken word can take the accent colour (and pop) without moving the rest
- * of the line. Boxes, marker bands and bars are drawn shapes on a layer below the words, sized from the fonts' exact
- * measurements. `keywords` are the highlighted words; `shows` the emojis, as the timeline times them.
+ * Every word change is its own event, so the spoken word can take the accent colour (and animate) without moving the
+ * rest of the line. Boxes, marker bands and bars are drawn shapes on a layer below the words, sized from the fonts'
+ * exact measurements; so is a soft shadow, and a glow. `keywords` are the highlighted words; `shows` the emojis, as the
+ * timeline times them.
  */
 function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnType<typeof emojiShows>, emojiStyle: ReelEdit["emojiStyle"], hook: string, look: Look, frame: Frame, spec: ReelSpec, duration: number): { ass: string; emojis: EmojiShot[] } {
   const { width: W, height: H } = frame;
@@ -830,6 +858,7 @@ function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnTyp
   const size = Math.round(look.size * base);
   const face = faceOf(look);
   const keyFace = keyFaceOf(look);
+  const boldFace = boldFaceOf(look);
   const hookSize = Math.round(0.056 * base);
   const markSize = Math.round(0.021 * base);
   const { anchor, top, bottom, hookY, layout } = placeCaptions(look, frame, spec, markSize);
@@ -837,11 +866,20 @@ function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnTyp
   const x = Math.round(W / 2);
   const stroke = CAPTION_STROKES[look.style];
   const hollow = look.fill === "hollow";
-  const outline = (hollow ? 0.045 : stroke.outline) * size;
   const karaoke = look.fill === "karaoke";
+  const boldFill = look.fill === "bold" && boldFace !== face;
+  const revealing = REVEALING_ANIMATIONS.includes(look.animation);
+  const keyScale = look.keyScale;
+  // Around and under the letters: the customer's stroke and shadow when they chose them, else the style's.
+  const outline = (look.strokeWidth ?? (hollow ? 0.045 : stroke.outline)) * size;
+  const outlineAlpha = look.strokeWidth !== undefined ? 0 : stroke.halo;
+  const outlineColor = hollow ? assColor(look.strokeColor ?? look.color) : assColor(look.strokeColor ?? "#000000", outlineAlpha);
+  const shadowAlpha = look.shadowKind === "hard" ? 0x10 : stroke.back;
+  const shadowDepth = look.shadowKind ? (look.shadowKind === "hard" ? SHADOW.offset : 0) * size : stroke.shadow * size;
+  const shadowColor = look.hardShadow && !look.shadowKind ? assColor(look.keyword) : assColor("#000000", shadowAlpha);
   const styles = [
     // Caption: karaoke fills from the words' colour (secondary) to the accent (primary); hollow letters are all outline.
-    `Style: Caption,${face.family},${size},${assColor(karaoke ? look.accent : look.color)},${assColor(look.color)},${hollow ? assColor(look.color) : assColor("#000000", stroke.halo)},${look.hardShadow ? assColor(look.keyword) : assColor("#000000", stroke.back)},0,${face.italic ? -1 : 0},0,0,100,100,0,0,1,${outline.toFixed(1)},${(stroke.shadow * size).toFixed(1)},${anchor === "top" ? 8 : 2},0,0,0,1`,
+    `Style: Caption,${face.family},${size},${assColor(karaoke ? look.accent : look.color)},${assColor(look.color)},${outlineColor},${shadowColor},0,${face.italic ? -1 : 0},0,0,100,100,0,0,1,${outline.toFixed(1)},${shadowDepth.toFixed(1)},${anchor === "top" ? 8 : 2},0,0,0,1`,
     `Style: Hook,Inter Black,${hookSize},${assColor("#0A0A0A")},${assColor("#0A0A0A")},${assColor(YELLOW)},${assColor("#000000", 0x80)},0,0,0,0,100,100,0,0,3,${Math.round(hookSize * 0.22)},0,8,0,0,0,1`,
     markStyle(markSize),
   ];
@@ -859,35 +897,55 @@ function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnTyp
   const lineHeight = size;
   const ascent = (face.asc / (face.asc + face.desc)) * size;
   const capHeight = (glyphOf(face, "H")[4] * size) / (face.asc + face.desc);
+  // A word's normal alphas, and none at all: for words that come in (typewriter, reveal, rise) and the soft shadow.
+  const alphaOn = `\\1a${hexAlpha(hollow ? 0xff : 0)}\\3a${hexAlpha(outlineAlpha)}\\4a${hexAlpha(shadowAlpha)}`;
+  const alphaOff = "\\1a&HFF&\\3a&HFF&\\4a&HFF&";
+  const scaleTag = (percent: number) => `\\fscx${Math.round(percent)}\\fscy${Math.round(percent)}`;
 
   groups.forEach((g, gi) => {
     const words = g.words.map((w) => shown(w.text, look));
-    const { lines, scale } = lineBreak(words, face, size, max);
-    blocks[gi] = lineHeight * scale * lines.length;
+    const isKey = (i: number) => keywords.has(g.words[i].i);
+    const wordScale = (i: number) => (isKey(i) ? keyScale : 1);
+    const faceFor = (i: number) => (isKey(i) && keyFace !== face ? keyFace : face);
+    // Lines are fitted to the words at their sizes, in the heavier face when the spoken word turns bold (the widest).
+    const { lines, scale } =
+      keyScale === 1 && !boldFill ? lineBreak(words, face, size, max) : lineBreakBy(words, (i) => advance(boldFill ? boldFace : face, words[i], size) * wordScale(i), space, max);
     const fs = scale < 1 ? `\\fs${Math.floor(size * scale)}` : "";
     const pos = anchor === "top" ? `\\an8\\pos(${x},${top})` : `\\an2\\pos(${x},${bottom})`;
     const breaks = new Set<number>(lines.length > 1 ? [lines[0].length] : []);
     const join = (parts: string[]) => parts.map((p, i) => (i > 0 ? (breaks.has(i) ? "\\N" : " ") : "") + p).join("");
-    const isKey = (i: number) => keywords.has(g.words[i].i);
-    const faceFor = (i: number) => (isKey(i) && keyFace !== face ? keyFace : face);
-    const fad = look.animation === "none" ? "" : look.animation === "fade" ? "\\fad(120,0)" : "\\fad(60,0)";
+    const fad = look.animation === "none" || revealing ? "" : look.animation === "fade" ? "\\fad(120,0)" : "\\fad(60,0)";
 
-    // Where each word sits, for shapes behind the words: its line, and its left and right edges.
+    // Where each word sits, for shapes behind the words: its line, and its left and right edges. A line with a bigger
+    // key word on it is taller (libass sizes a line to its biggest letters).
     const lineOf = (i: number) => (lines.length > 1 && i >= lines[0].length ? 1 : 0);
     const span = (l: number) => (l === 0 ? [0, lines[0].length] : [lines[0].length, words.length]);
-    const lineWidth = (l: number) => {
+    const lineScale = (l: number) => {
+      const [from, to] = span(l);
+      let most = 1;
+      for (let i = from; i < to; i++) most = Math.max(most, wordScale(i));
+      return most;
+    };
+    const faceAt = (i: number, k: number) => (boldFill && i === k ? boldFace : faceFor(i));
+    const wordWidth = (i: number, k: number) => advance(faceAt(i, k), words[i], size) * wordScale(i);
+    const lineWidth = (l: number, k = -1) => {
       const [from, to] = span(l);
       let w = 0;
-      for (let i = from; i < to; i++) w += advance(faceFor(i), words[i], size) + (i > from ? space : 0);
+      for (let i = from; i < to; i++) w += wordWidth(i, k) + (i > from ? space : 0);
       return w * scale;
     };
-    const lineTop = (l: number) => (anchor === "top" ? top + l * lineHeight * scale : bottom - (lines.length - l) * lineHeight * scale);
-    const wordBox = (i: number) => {
+    const lineTop = (l: number) => {
+      const heights = lines.map((_, m) => lineHeight * scale * lineScale(m));
+      if (anchor === "top") return top + heights.slice(0, l).reduce((a, b) => a + b, 0);
+      return bottom - heights.slice(l).reduce((a, b) => a + b, 0);
+    };
+    blocks[gi] = lines.reduce((h, _, l) => h + lineHeight * scale * lineScale(l), 0);
+    const wordBox = (i: number, k: number) => {
       const l = lineOf(i);
       const [from] = span(l);
-      let left = x - lineWidth(l) / 2;
-      for (let j = from; j < i; j++) left += (advance(faceFor(j), words[j], size) + space) * scale;
-      return { l, x0: left, x1: left + advance(faceFor(i), words[i], size) * scale };
+      let left = x - lineWidth(l, k) / 2;
+      for (let j = from; j < i; j++) left += (wordWidth(j, k) + space) * scale;
+      return { l, x0: left, x1: left + wordWidth(i, k) * scale };
     };
 
     // Shapes behind the words, for the whole line: a box, or a lower-third bar with an accent stripe.
@@ -896,9 +954,9 @@ function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnTyp
     if (look.background === "box") {
       const pad = [0.28 * size * scale, 0.14 * size * scale];
       const widest = Math.max(...lines.map((_, l) => lineWidth(l)));
-      shape(g.start, g.end, roundedRect(x - widest / 2 - pad[0], lineTop(0) + 0.06 * size - pad[1], x + widest / 2 + pad[0], lineTop(lines.length - 1) + lineHeight * scale - 0.02 * size + pad[1], 0.22 * size), look.backgroundColor, 0x38);
+      shape(g.start, g.end, roundedRect(x - widest / 2 - pad[0], lineTop(0) + 0.06 * size - pad[1], x + widest / 2 + pad[0], lineTop(lines.length - 1) + lineHeight * scale * lineScale(lines.length - 1) - 0.02 * size + pad[1], 0.22 * size), look.backgroundColor, boxAlpha(look.backgroundColor));
     } else if (look.background === "bar") {
-      const [y0, y1] = [lineTop(0) - 0.2 * size, lineTop(lines.length - 1) + lineHeight * scale + 0.2 * size];
+      const [y0, y1] = [lineTop(0) - 0.2 * size, lineTop(lines.length - 1) + lineHeight * scale * lineScale(lines.length - 1) + 0.2 * size];
       shape(g.start, g.end, roundedRect(W * 0.05, y0, W * 0.95, y1, 0.12 * size), look.backgroundColor, 0x20);
       shape(g.start, g.end, roundedRect(W * 0.05, y0, W * 0.05 + 0.16 * size, y1, 0.06 * size), look.accent, 0, 0);
     }
@@ -909,7 +967,8 @@ function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnTyp
         const next = i + 1 < g.words.length ? g.words[i + 1].start : g.end;
         const fill = Math.max(1, Math.round((Math.min(next, w.end + 0.15) - w.start) * 100));
         const wait = Math.max(0, Math.round((next - w.start) * 100) - fill);
-        const word = isKey(i) ? `{\\1c${tagColor(look.keyword)}}${words[i]}{\\1c${tagColor(look.accent)}}` : words[i];
+        const big = isKey(i) && keyScale !== 1 ? [scaleTag(100 * keyScale), scaleTag(100)] : ["", ""];
+        const word = isKey(i) ? `{\\1c${tagColor(look.keyword)}${big[0]}}${words[i]}{\\1c${tagColor(look.accent)}${big[1]}}` : words[i];
         return `{\\kf${fill}}${word}${wait ? `{\\k${wait}}` : ""}`;
       });
       dialogue(g.start, g.end, "Caption", `{${pos}${fs}${look.animation === "none" ? "" : "\\fad(80,60)"}}${join(parts)}`);
@@ -919,44 +978,87 @@ function buildAss(groups: CaptionLine[], keywords: Set<number>, shows: ReturnTyp
         const start = k === 0 ? g.start : w.start;
         const end = k + 1 < g.words.length ? g.words[k + 1].start : g.end;
         if (look.background === "band") {
-          // The marker: a rounded band behind the spoken word.
-          const box = wordBox(k);
-          const y = lineTop(box.l) + (ascent - capHeight) * scale;
-          shape(start, end, roundedRect(box.x0 - 0.12 * size, y - 0.16 * size * scale, box.x1 + 0.12 * size, y + (capHeight + 0.16 * size) * scale, 0.14 * size), look.backgroundColor, 0);
+          // The marker: a rounded band behind the spoken word, from its capitals' top to just under its baseline.
+          const box = wordBox(k, k);
+          const s = wordScale(k);
+          const baseline = lineTop(box.l) + ascent * scale * lineScale(box.l);
+          const y = baseline - capHeight * scale * s;
+          shape(start, end, roundedRect(box.x0 - 0.12 * size * s, y - 0.16 * size * scale * s, box.x1 + 0.12 * size * s, baseline + 0.16 * size * scale * s, 0.14 * size * s), look.backgroundColor, 0);
         }
-        const parts = words.map((word, i) => {
-          const heavy = faceFor(i) !== face ? `\\fn${faceFor(i).family}` : "";
-          const back = heavy ? `\\fn${face.family}` : "";
-          if (look.fill === "dim") {
-            const alpha = i === k ? "&H00&" : "&H48&";
-            return `{\\1a${alpha}${heavy}}${word}${back ? `{${back}}` : ""}`;
-          }
-          if (hollow) {
-            // Outlined letters; the spoken word filled in the accent colour.
-            return i === k ? `{\\1a&H00&\\1c${tagColor(look.accent)}}${word}{\\1a&HFF&}` : word;
-          }
-          const color = isKey(i) && look.keyword !== look.color ? look.keyword : look.accent;
-          if (i === k) {
-            const pop = look.animation === "pop" && look.background !== "band" ? (look.size >= 0.06 ? (isKey(i) ? 124 : 114) : 108) : 0;
-            const grow = pop ? `\\fscx${pop}\\fscy${pop}\\t(0,110,\\fscx100\\fscy100)` : "";
-            // On the marker band the word is printed flat: no outline or shadow.
-            const [flat, unflat] = look.background === "band" ? ["\\bord0\\shad0", `\\bord${outline.toFixed(1)}\\shad${(stroke.shadow * size).toFixed(1)}`] : ["", ""];
-            return `{\\1c${tagColor(color)}${heavy}${grow}${flat}}${word}{\\1c${tagColor(look.color)}${pop ? "\\fscx100\\fscy100" : ""}${back}${unflat}}`;
-          }
-          if (isKey(i) && look.keyword !== look.color) return `{\\1c${tagColor(look.keyword)}${heavy}}${word}{\\1c${tagColor(look.color)}${back}}`;
-          return heavy ? `{${heavy}}${word}{${back}}` : word;
-        });
-        const text = join(parts);
+        // A word as a layer draws it: the words (all of it), its soft shadow, or its glow (only their own parts).
+        const wordParts = (layer: "words" | "shadow" | "glow") => {
+          const on = layer === "words" ? alphaOn : layer === "shadow" ? `\\1a${hexAlpha(0x40)}\\3a&HFF&\\4a&HFF&` : "\\1a&HFF&\\3a&H30&\\4a&HFF&";
+          return words.map((word, i) => {
+            const heavy = faceAt(i, k) !== face ? `\\fn${faceAt(i, k).family}` : "";
+            const back = heavy ? `\\fn${face.family}` : "";
+            const big = isKey(i) && keyScale !== 1 ? scaleTag(100 * keyScale) : "";
+            const unbig = big ? scaleTag(100) : "";
+            // Not said yet: in its place, unseen.
+            if (revealing && i > k) return `{${alphaOff}${heavy}${big}}${word}{${on}${back}${unbig}}`;
+            if (layer === "glow") {
+              const wide = i === k ? [`\\bord${(0.16 * size).toFixed(1)}`, `\\bord${(0.1 * size).toFixed(1)}`] : ["", ""];
+              return wide[0] || heavy || big ? `{${wide[0]}${heavy}${big}}${word}{${wide[1]}${back}${unbig}}` : word;
+            }
+            if (i === k) {
+              // Hollow letters never popped (only the newer animations move them).
+              const motion = hollow && look.animation === "pop" ? null : wordMotion(look, isKey(i));
+              let anim = "";
+              let reset = "";
+              if (look.animation === "typewriter") {
+                // Letter by letter, from when the word is said.
+                const letters = [...word].map((ch, n) => `{${alphaOff}\\t(${Math.round(n * TYPEWRITER_LETTER * 1000)},${Math.round(n * TYPEWRITER_LETTER * 1000) + 1},${on})}${ch}`).join("");
+                const tags = layer === "words" ? [colorFor(i), heavy + big] : ["", heavy + big];
+                return `{${tags[0]}${tags[1]}}${letters}{${on}${layer === "words" ? `\\1c${tagColor(look.color)}` : ""}${back}${unbig}}`;
+              }
+              if (look.animation === "reveal") {
+                anim = `${alphaOff}${scaleTag(90 * wordScale(i))}\\t(0,80,${on}${scaleTag(100 * wordScale(i))})`;
+                reset = `${on}${scaleTag(100)}`;
+              } else if (motion) {
+                const s = wordScale(i);
+                const [first, ...rest] = motion.scale;
+                anim = motion.fromY ? `\\fscx${Math.round(100 * s)}\\fscy${Math.round(motion.fromY * s)}${alphaOff}\\t(0,${motion.fade ?? 0},${on})\\t(0,${rest[rest.length - 1][0]},\\fscy${Math.round(100 * s)})` : scaleTag(first[1] * s) + rest.map(([t, v], n) => `\\t(${n === 0 ? first[0] : rest[n - 1][0]},${t},${scaleTag(v * s)})`).join("");
+                reset = `${motion.fromY ? on : ""}${scaleTag(100)}`;
+              } else if (big) {
+                anim = big;
+                reset = unbig;
+              }
+              if (layer !== "words") return `{${heavy}${anim}}${word}{${back}${reset}}`;
+              if (look.fill === "dim" && !anim) return `{\\1a&H00&${heavy}}${word}${back ? `{${back}}` : ""}`;
+              if (hollow && !anim) return `{\\1a&H00&\\1c${tagColor(look.accent)}}${word}{\\1a&HFF&}`;
+              // On the marker band the word is printed flat: no outline or shadow.
+              const [flat, unflat] = look.background === "band" ? ["\\bord0\\shad0", `\\bord${outline.toFixed(1)}\\shad${shadowDepth.toFixed(1)}`] : ["", ""];
+              return `{${colorFor(i)}${heavy}${anim}${flat}}${word}{${hollow ? "\\1a&HFF&" : `\\1c${tagColor(look.color)}`}${reset}${back}${unflat}}`;
+            }
+            if (layer !== "words") return heavy || big ? `{${heavy}${big}}${word}{${back}${unbig}}` : word;
+            if (look.fill === "dim") return `{\\1a&H48&${heavy}${big}}${word}${back || unbig ? `{${back}${unbig}}` : ""}`;
+            if (hollow) return big ? `{${big}}${word}{${unbig}}` : word;
+            if (isKey(i) && look.keyword !== look.color) return `{\\1c${tagColor(look.keyword)}${heavy}${big}}${word}{\\1c${tagColor(look.color)}${back}${unbig}}`;
+            return heavy || big ? `{${heavy}${big}}${word}{${back}${unbig}}` : word;
+          });
+        };
+        // The spoken word's colour: the accent (on a band, the band's own text colour), or a key word's, or filled
+        // (hollow), or full (dim).
+        function colorFor(i: number) {
+          if (look.fill === "dim") return "\\1a&H00&";
+          if (hollow) return `\\1a&H00&\\1c${tagColor(look.accent)}`;
+          const color = look.background !== "band" && isKey(i) && look.keyword !== look.color ? look.keyword : look.accent;
+          return `\\1c${tagColor(color)}`;
+        }
         const fill = hollow ? "\\1a&HFF&" : "";
         if (look.glow) {
           // The glow underneath: a wide, blurred outline in the accent colour, wider on the spoken word.
-          const glow = words.map((word, i) => (i === k ? `{\\bord${(0.16 * size).toFixed(1)}}${word}{\\bord${(0.1 * size).toFixed(1)}}` : word));
-          dialogue(start, end, "Caption", `{${pos}${fs}${k === 0 ? fad : ""}\\1a&HFF&\\3c${tagColor(look.accent)}\\3a&H30&\\bord${(0.1 * size).toFixed(1)}\\blur${Math.round(0.12 * size)}\\shad0}${join(glow)}`, 0);
+          dialogue(start, end, "Caption", `{${pos}${fs}${k === 0 ? fad : ""}\\1a&HFF&\\3c${tagColor(look.accent)}\\3a&H30&\\bord${(0.1 * size).toFixed(1)}\\blur${Math.round(0.12 * size)}\\shad0}${join(wordParts("glow"))}`, 0);
         }
-        dialogue(start, end, "Caption", `{${pos}${fs}${soft}${fill}${k === 0 ? fad : ""}}${text}`);
+        if (look.shadowKind === "soft") {
+          // A soft shadow underneath: the letters again in see-through black, a little lower, blurred (libass draws no
+          // shadow for letters that are themselves invisible, so this is the shadow).
+          const drop = Math.round(SHADOW.offset * size);
+          const under = anchor === "top" ? `\\an8\\pos(${x},${top + drop})` : `\\an2\\pos(${x},${bottom + drop})`;
+          dialogue(start, end, "Caption", `{${under}${fs}${k === 0 ? fad : ""}\\1c&H000000&\\1a${hexAlpha(0x40)}\\3a&HFF&\\4a&HFF&\\bord0\\shad0\\blur${Math.round(SHADOW.blur * size)}}${join(wordParts("shadow"))}`, 0);
+        }
+        dialogue(start, end, "Caption", `{${pos}${fs}${soft}${fill}${k === 0 ? fad : ""}}${join(wordParts("words"))}`);
       });
     }
-
   });
 
   // Each emoji pops in by its line as its word is said: above the caption, or below it (by default below when captions
@@ -1864,4 +1966,7 @@ async function main() {
   }
 }
 
-await main();
+// REEL_TEST=1: imported by tests for the caption writer (buildAss), without running a job.
+if (process.env.REEL_TEST !== "1") await main();
+
+export { buildAss, lookFor };
