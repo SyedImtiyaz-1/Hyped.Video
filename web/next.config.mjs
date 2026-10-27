@@ -23,4 +23,11 @@ export default {
   serverExternalPackages: ["@prisma/client", ".prisma/client"],
   images: { remotePatterns: [{ protocol: "https", hostname: "**" }] },
   devIndicators: { position: "bottom-right" }, // keep the dev badge off the sidebar
+  // Templates became recipes (docs/RECIPES.md); old links and bookmarks keep working, query string included.
+  async redirects() {
+    return [
+      { source: "/templates", destination: "/recipes", permanent: true },
+      { source: "/dashboard/templates", destination: "/dashboard/recipes", permanent: true },
+    ];
+  },
 };

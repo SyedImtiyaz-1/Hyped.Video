@@ -1,28 +1,25 @@
 import { ArrowRight, AudioLines, Captions, Check, Clapperboard, FileText, Gift, Link2, Megaphone, MonitorSmartphone, Music, Share2, Sparkles } from "lucide-react";
-import { PACKS, QUALITY_CREDIT_MULTIPLIER, TEMPLATES, TRIAL_CREDITS, perCredit, templateById, type Template } from "@launchreel/core";
+import { LIVE_RECIPES, PACKS, QUALITY_CREDIT_MULTIPLIER, TRIAL_CREDITS, perCredit } from "@launchreel/core";
 import { CreditTable } from "@/components/credit-table";
 import { PackCards, PriceNote, cheapestPack } from "@/components/pricing/pack-cards";
 import { ReelPackCard } from "@/components/pricing/reel-pack-card";
 import { reelPackOn } from "@/lib/dodo";
-import { ShowcaseGallery } from "@/components/showcase/showcase-gallery";
-import { TemplateCard } from "@/components/templates/template-gallery";
+import { FeatureBento } from "@/components/marketing/feature-bento";
+import { FloatingSamples } from "@/components/marketing/floating-samples";
+import { HeroPrompt } from "@/components/marketing/hero-prompt";
+import { RecipeGallery } from "@/components/recipes/recipe-gallery";
+import { ShowcaseMarquee } from "@/components/showcase/showcase-marquee";
 import { ButtonLink } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { visitorCurrency } from "@/lib/region";
-import { HERO, SHOWCASE, posterSrc, videoSrc } from "@/lib/showcase";
+import { SHOWCASE } from "@/lib/showcase";
 import { studioAvailable } from "@/lib/studio";
-import { HeroCreate } from "@/components/hero-create";
 
 const STEPS = [
   { icon: Link2, title: "Paste a URL or repo", body: "Your website, or a GitHub repo, public or private. We read your real copy, colors, fonts and UI." },
   { icon: Clapperboard, title: "We plan, build and render", body: "An agent writes the storyboard, animates your product, scores it and renders an MP4." },
   { icon: Share2, title: "Share it everywhere", body: "Download the video with share copy. Ask for changes in plain English." },
 ];
-
-const SPECS = ["16:9 · 9:16 · 1:1", "15–90 seconds", "Music and AI voiceover", "Captions and share copy"];
-
-// Shown on the homepage; the rest are one click away on /templates.
-const FEATURED_TEMPLATES = ["launch-day", "three-features", "problem-solution"].map((id) => templateById(id)).filter((t): t is Template => Boolean(t));
 
 // What every video comes with, whichever pack paid for it.
 const INCLUDED = [
@@ -66,70 +63,57 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
   const from = money(perCredit(cheapestPack(currency), currency), currency);
   return (
     <main>
-      <section className="relative overflow-hidden border-b border-gray-alpha-400">
+      <section className="relative flex min-h-[calc(100dvh-4rem)] items-center overflow-hidden border-b border-gray-alpha-400">
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,var(--ds-gray-alpha-200)_1px,transparent_1px),linear-gradient(to_bottom,var(--ds-gray-alpha-200)_1px,transparent_1px)] [background-size:64px_64px] [mask-image:radial-gradient(ellipse_at_top,black_30%,transparent_70%)]"
         />
-        <div className="relative mx-auto max-w-[1200px] px-4 pb-20 pt-20 text-center md:px-8 md:pb-28 md:pt-28">
-          <span className="inline-flex items-center gap-2 rounded-full border border-gray-alpha-400 bg-background-100 px-3 py-1 text-[13px] font-medium">
-            <span className="size-1.5 rounded-full bg-brand shadow-[0_0_8px_var(--ds-brand)]" />
-            Now in beta
-          </span>
-          <h1 className="mx-auto mt-6 max-w-3xl text-[44px] font-semibold leading-[1.05] tracking-[-0.05em] md:text-[72px]">
-            Launch videos made from your <span className="text-brand">real product.</span>
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg text-gray-900 md:text-xl">
-            Paste your website or GitHub repo. In about 15 minutes you get a polished launch video with music, motion, an optional AI voiceover and share copy, built from your actual UI instead of stock footage.
-          </p>
-          <HeroCreate className="mt-8" />
-          <p className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[13px] text-gray-900">
-            <span>5 free credits. No card required.</span>
-            <a href="/templates" className="underline-offset-2 hover:text-gray-1000 hover:underline">
-              Start from a template
-            </a>
-            <a href="#pricing" className="underline-offset-2 hover:text-gray-1000 hover:underline">
-              See pricing
-            </a>
-          </p>
+        {/* Two soft glows, lime and teal, drifting behind the headline. */}
+        <div aria-hidden className="pointer-events-none absolute left-1/2 top-[-160px] h-[560px] w-[min(1000px,140vw)] -translate-x-1/2">
+          <div className="absolute inset-0 rounded-full bg-[radial-gradient(closest-side,rgb(200_241_53/0.16),transparent)] motion-safe:animate-aurora" />
+          <div className="absolute inset-0 translate-x-1/4 rounded-full bg-[radial-gradient(closest-side,rgb(45_212_191/0.09),transparent)] motion-safe:animate-aurora [animation-delay:-8s]" />
+        </div>
+        <FloatingSamples />
+        <div className="relative mx-auto w-full max-w-[1200px] px-4 py-20 md:px-8">
+          <HeroPrompt />
+        </div>
+        {/* A timeline's ruler along the bottom edge: small ticks every 8px, tall ones every 64px. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-6 [background-image:repeating-linear-gradient(to_right,var(--ds-gray-alpha-500)_0_1px,transparent_1px_8px),repeating-linear-gradient(to_right,var(--ds-gray-alpha-700)_0_1px,transparent_1px_64px)] [background-position:bottom] [background-repeat:repeat-x] [background-size:auto_10px,auto_100%] [mask-image:linear-gradient(to_right,transparent,black_15%,black_85%,transparent)]"
+        />
+      </section>
 
-          {HERO && (
-            <div className="relative mx-auto mt-16 max-w-4xl">
-              <div aria-hidden className="pointer-events-none absolute -inset-x-8 -inset-y-6 rounded-[40px] bg-brand/15 blur-[90px]" />
-              <div className="relative overflow-hidden rounded-2xl border border-gray-alpha-400 bg-background-200 shadow-[0_24px_80px_-24px_rgb(0_0_0/0.9)]">
-                <video
-                  src={videoSrc(HERO)}
-                  poster={posterSrc(HERO)}
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  controls
-                  preload="metadata"
-                  aria-label={`Example launch video: ${HERO.product}`}
-                  className="block aspect-video w-full"
-                />
-              </div>
-              <p className="mt-4 text-[13px] text-gray-900">
-                The launch film Hyped made for{" "}
-                <a href={`https://${HERO.product}`} target="_blank" rel="noreferrer" className="text-gray-1000 underline-offset-2 hover:underline">
-                  {HERO.product}
-                </a>{" "}
-                from its live site, with voiceover and captions. Unmute to hear it.
-              </p>
+      <section id="recipes" className="border-b border-gray-alpha-400 py-20">
+        <div className="mx-auto max-w-[1200px] px-4 md:px-8">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Start from a recipe</h2>
+              <p className="mt-3 max-w-xl text-gray-900">Proven videos you make your own. Pick one, add your product, and every choice is filled in. You can still change anything.</p>
             </div>
-          )}
-
-          <ul className="mx-auto mt-10 flex max-w-3xl flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-900">
-            {SPECS.map((s) => (
-              <li key={s} className="flex items-center gap-2">
-                <Check className="size-4 text-brand" />
-                {s}
-              </li>
-            ))}
-          </ul>
+            <ButtonLink href="/recipes">
+              All {LIVE_RECIPES.length} recipes <ArrowRight />
+            </ButtonLink>
+          </div>
+          <div className="mt-8">
+            <RecipeGallery base="public" limit={6} />
+          </div>
         </div>
       </section>
+
+      {SHOWCASE.length > 0 && (
+        <section id="examples" className="border-b border-gray-alpha-400 py-20">
+          <div className="mx-auto max-w-[1200px] px-4 md:px-8">
+            <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Made with Hyped</h2>
+            <p className="mt-3 max-w-2xl text-gray-900">
+              Each of these came straight out of Hyped from a real product&apos;s site or repo, with no hand editing. Hover to preview, click to watch with sound.
+            </p>
+          </div>
+          <div className="mt-10">
+            <ShowcaseMarquee />
+          </div>
+        </section>
+      )}
 
       <section id="how" className="mx-auto max-w-[1200px] px-4 py-20 md:px-8">
         <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">From link to launch video</h2>
@@ -150,32 +134,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
         </div>
       </section>
 
-      {SHOWCASE.length > 0 && (
-        <section id="examples" className="mx-auto max-w-[1200px] px-4 pb-20 md:px-8">
-          <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Made with Hyped</h2>
-          <p className="mt-3 max-w-2xl text-gray-900">
-            Each of these came straight out of Hyped from a real product&apos;s site or repo, with no hand editing. Play one to watch it with sound.
-          </p>
-          <div className="mt-8">
-            <ShowcaseGallery />
-          </div>
-        </section>
-      )}
-
-      <section id="templates" className="mx-auto max-w-[1200px] px-4 pb-20 md:px-8">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Start from a template</h2>
-            <p className="mt-3 max-w-xl text-gray-900">Proven recipes for launches, updates and ads. Pick one, paste your link, and every step is filled in for you.</p>
-          </div>
-          <ButtonLink href="/templates">
-            All {TEMPLATES.length} templates <ArrowRight />
-          </ButtonLink>
-        </div>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
-          {FEATURED_TEMPLATES.map((t) => (
-            <TemplateCard key={t.id} template={t} href={`/dashboard/new?template=${t.id}`} />
-          ))}
+      <section id="features" className="mx-auto max-w-[1200px] px-4 pb-20 md:px-8">
+        <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Everything a launch needs</h2>
+        <p className="mt-3 max-w-2xl text-gray-900">Product videos from your site, and reels from the clips you record. Every video comes with all of it, whichever pack paid for it.</p>
+        <div className="mt-10">
+          <FeatureBento />
         </div>
       </section>
 

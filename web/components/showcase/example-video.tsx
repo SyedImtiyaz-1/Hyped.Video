@@ -27,6 +27,13 @@ export function ExampleVideo({ video, label }: { video: ShowcaseVideo; label: st
   const [shown, setShown] = useState(false); // the preview is playing, so it can fade in over the poster
   const dialog = useRef<HTMLDialogElement>(null);
   const player = useRef<HTMLVideoElement>(null);
+  const poster = useRef<HTMLImageElement>(null);
+
+  // A poster that failed before hydration never reaches onError; hide it the same way once the page is live.
+  useEffect(() => {
+    const img = poster.current;
+    if (img?.complete && img.naturalWidth === 0) img.style.visibility = "hidden";
+  }, []);
 
   // However the dialog closes (the X, a click outside, Esc), the video stops. A native listener: React's onClose
   // on <dialog> didn't fire here.
@@ -61,8 +68,9 @@ export function ExampleVideo({ video, label }: { video: ShowcaseVideo; label: st
         aria-label={`Watch ${label}`}
         className={cn("relative overflow-hidden rounded-lg border border-gray-alpha-400 bg-black", SHAPE[video.format])}
       >
+        {/* A poster that can't load is hidden rather than shown as a broken image; the tile stays, black, with its play button. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={posterSrc(video)} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
+        <img ref={poster} src={posterSrc(video)} alt="" loading="lazy" decoding="async" onError={(e) => (e.currentTarget.style.visibility = "hidden")} className="absolute inset-0 size-full object-cover" />
         {preview && (
           <video
             src={videoSrc(video)}

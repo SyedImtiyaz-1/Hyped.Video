@@ -14,7 +14,7 @@ import { Input, Label, Textarea } from "@/components/ui/input";
 import { PrivateRepoToken, saveRepoToken, type RepoTokenSetup } from "./private-repo-token";
 import { normalizeSourceUrl } from "@/lib/source-url";
 
-const TONES = [
+export const TONES = [
   { value: "", label: "Auto", hint: "We pick what fits your product" },
   {
     value: "polished",
@@ -29,7 +29,7 @@ const TONES = [
   { value: "chaotic", label: "Chaotic", hint: "Fast, loud, all caps" },
 ];
 
-const FORMATS = [
+export const FORMATS = [
   {
     value: "landscape",
     label: "Landscape",
@@ -75,7 +75,7 @@ const VIDEO_TYPE_OPTIONS = [
 ] as const;
 type VideoTypeValue = (typeof VIDEO_TYPE_OPTIONS)[number]["value"];
 
-const MUSIC_OPTIONS = [
+export const MUSIC_OPTIONS = [
   {
     value: "upbeat",
     label: "Upbeat music",
@@ -87,7 +87,7 @@ const MUSIC_OPTIONS = [
 type MusicValue = (typeof MUSIC_OPTIONS)[number]["value"];
 
 // Two quality tiers. Customers see only these names; which engine runs each is server config.
-const QUALITY_OPTIONS = [
+export const QUALITY_OPTIONS = [
   {
     value: "standard",
     label: "Standard",
@@ -112,7 +112,7 @@ const SOURCES = [
 const DIRECTION_IDEAS = ["Make it feel like a keynote", "Fast cuts, bold type", "Show the signup flow", "Focus on the AI features", "End on the pricing page"];
 
 // 15–30s: a teaser for social. 60–90s: a full launch video for your homepage.
-const LENGTHS = [15, 20, 30, 60, 90];
+export const LENGTHS = [15, 20, 30, 60, 90];
 
 // The form is a wizard: one question per step, so nothing needs scrolling to find.
 const STEPS = [
@@ -324,7 +324,7 @@ export function NewVideoForm({
             Template: <span className="font-medium text-gray-1000">{activeTemplate.name}</span>
             <span className="hidden text-gray-900 sm:inline"> · {activeTemplate.use}</span>
           </span>
-          <Link href={`/dashboard/templates${url ? `?url=${encodeURIComponent(url)}` : ""}`} className="text-[13px] text-gray-900 underline-offset-2 hover:text-gray-1000 hover:underline">
+          <Link href={`/dashboard/recipes${url ? `?url=${encodeURIComponent(url)}` : ""}`} className="text-[13px] text-gray-900 underline-offset-2 hover:text-gray-1000 hover:underline">
             Change
           </Link>
           <button type="button" onClick={() => setTemplateOn(false)} className="flex items-center gap-1 text-[13px] text-gray-900 hover:text-gray-1000" aria-label="Remove the template">
