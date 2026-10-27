@@ -675,7 +675,15 @@ async function serveMedia(request: Request, env: Env, key: string): Promise<Resp
 
 /** A file from the bucket, with conditional requests and ranges (so players can seek). */
 async function serveFile(request: Request, env: Env, key: string): Promise<Response> {
-  const object = await env.VIDEOS.get(key, { range: request.headers, onlyIf: request.headers });
+  let object;
+  try {
+    object = await env.VIDEOS.get(key, { range: request.headers, onlyIf: request.headers });
+  } catch (err) {
+    // A failing bucket (a missing binding, a deleted or renamed bucket, R2 itself) would otherwise surface as a bare
+    // Cloudflare 1101 on every video: log what R2 said, so Workers Logs shows the cause, and answer with a retryable 503.
+    console.error(`[media] R2 get failed for ${key}:`, err instanceof Error ? `${err.name}: ${err.message}` : err);
+    return new Response("Media is temporarily unavailable", { status: 503, headers: { "retry-after": "60", "cache-control": "no-store" } });
+  }
   if (!object) return new Response("Not found", { status: 404 });
   const headers = new Headers();
   object.writeHttpMetadata(headers);
