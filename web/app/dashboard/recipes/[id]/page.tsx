@@ -8,7 +8,7 @@ import { RecipePanel } from "./recipe-panel";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
-  return { title: recipeById((await params).id)?.name ?? "Recipe" };
+  return { title: recipeById((await params).id)?.name ?? "Template" };
 }
 
 export default async function RecipePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ url?: string; notes?: string }> }) {
