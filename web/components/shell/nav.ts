@@ -1,10 +1,11 @@
 import { Captions, Clapperboard, CreditCard, Gauge, GitPullRequest, LayoutGrid, LayoutTemplate, Palette, Plus, Settings, Shield } from "lucide-react";
+import { recipeById } from "@launchreel/core/recipes";
 
 export const MAIN_NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutGrid, exact: true },
   { href: "/dashboard/videos", label: "Videos", icon: Clapperboard },
   { href: "/dashboard/new", label: "New video", icon: Plus },
-  { href: "/dashboard/templates", label: "Templates", icon: LayoutTemplate },
+  { href: "/dashboard/recipes", label: "Recipes", icon: LayoutTemplate },
   { href: "/dashboard/reels", label: "Reels", icon: Captions },
   { href: "/dashboard/usage", label: "Usage", icon: Gauge },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
@@ -27,7 +28,8 @@ const TITLES: Record<string, string> = {
   "/dashboard": "Overview",
   "/dashboard/videos": "Videos",
   "/dashboard/new": "New video",
-  "/dashboard/templates": "Templates",
+  "/dashboard/start": "New video",
+  "/dashboard/recipes": "Recipes",
   "/dashboard/reels": "Reels",
   "/dashboard/usage": "Usage",
   "/dashboard/billing": "Billing",
@@ -38,5 +40,7 @@ const TITLES: Record<string, string> = {
 export function breadcrumbs(pathname: string): { label: string; href?: string }[] {
   const video = pathname.match(/^\/dashboard\/videos\/([^/]+)/);
   if (video) return [{ label: "Videos", href: "/dashboard/videos" }, { label: video[1].slice(-8) }];
+  const recipe = pathname.match(/^\/dashboard\/recipes\/([^/]+)/);
+  if (recipe) return [{ label: "Recipes", href: "/dashboard/recipes" }, { label: recipeById(recipe[1])?.name ?? "Recipe" }];
   return [{ label: TITLES[pathname] ?? "Dashboard" }];
 }

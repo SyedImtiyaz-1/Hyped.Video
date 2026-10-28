@@ -5,7 +5,7 @@ import { SHOWCASE, type ShowcaseVideo } from "@/lib/showcase";
 const RATIO: Record<ShowcaseVideo["format"], string> = { landscape: "16:9", vertical: "9:16", square: "1:1" };
 
 /** "Made with Hyped": finished videos of real products, each with the template and settings that made it. */
-export function ShowcaseGallery({ videos = SHOWCASE }: { videos?: readonly ShowcaseVideo[] }) {
+export function ShowcaseGallery({ videos = SHOWCASE.filter((v) => v.gallery !== false) }: { videos?: readonly ShowcaseVideo[] }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {videos.map((v) => {

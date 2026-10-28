@@ -1,5 +1,5 @@
 import DodoPayments from "dodopayments";
-import type { PackKey } from "@launchreel/core";
+import type { PackKey, ReelPackKey } from "@launchreel/core";
 
 let client: DodoPayments | undefined;
 
@@ -12,17 +12,22 @@ export function dodo() {
   }));
 }
 
-// Our credit packs → Dodo product IDs (create one-time products in the Dodo dashboard, then paste the IDs).
+// Our packs → Dodo product IDs (scripts/dodo-sync-packs.mjs keeps the products in step, `npm run secrets` the IDs).
 // Read per call, not at module load: on Workers, env values are safest read inside a request.
-const productIds = (): Record<PackKey, string | undefined> => ({
+const productIds = (): Record<PackKey | ReelPackKey, string | undefined> => ({
   STARTER: process.env.DODO_PRODUCT_STARTER,
   CREATOR: process.env.DODO_PRODUCT_CREATOR,
   PRO: process.env.DODO_PRODUCT_PRO,
+  REELS: process.env.DODO_PRODUCT_REELS,
 });
 
-export const productIdFor = (key: PackKey) => productIds()[key];
+export const productIdFor = (key: PackKey | ReelPackKey) => productIds()[key];
 
-export function packFor(productId: string): PackKey | undefined {
+/** Whether the reel pack can be bought yet: its Dodo product is set (`npm run dodo:sync -- --apply`, then `npm run secrets`). */
+export const reelPackOn = () => Boolean(productIdFor("REELS")) || process.env.DEMO_MODE === "true";
+
+/** The pack a Dodo product sells: a credit pack or a reel pack. */
+export function packFor(productId: string): PackKey | ReelPackKey | undefined {
   const ids = productIds();
-  return (Object.keys(ids) as PackKey[]).find((k) => ids[k] === productId);
+  return (Object.keys(ids) as (PackKey | ReelPackKey)[]).find((k) => ids[k] === productId);
 }

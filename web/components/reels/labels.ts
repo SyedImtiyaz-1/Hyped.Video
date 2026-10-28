@@ -14,6 +14,12 @@ export const REEL_STYLE_INFO: Record<ReelStyle, { label: string; hint: string }>
   retro: { label: "Retro", hint: "Chunky type with a hard shadow" },
   news: { label: "News bar", hint: "A lower-third bar, like TV news" },
   minimal: { label: "Minimal", hint: "Small lowercase, lower third" },
+  hustle: { label: "Hustle", hint: "Huge heavy capitals that rise in, key word in green" },
+  comic: { label: "Comic", hint: "Bouncy comic capitals, two words at a time" },
+  glide: { label: "Glide", hint: "Light lowercase, the spoken word turns bold" },
+  editorial: { label: "Editorial", hint: "Italic serif, like a magazine" },
+  native: { label: "Native", hint: "TikTok's own font on a white box" },
+  pill: { label: "Pill", hint: "The spoken word on a blue pill" },
 };
 
 export const REEL_LANGUAGE_LABEL: Record<ReelLanguage, string> = { auto: "Auto", en: "English", hinglish: "Hinglish" };

@@ -2,10 +2,12 @@ import { Check, Info, Receipt } from "lucide-react";
 import { PACKS, type PackKey } from "@launchreel/core";
 import { CreditTable } from "@/components/credit-table";
 import { PackCards, PriceNote, RECOMMENDED } from "@/components/pricing/pack-cards";
+import { ReelPackCard } from "@/components/pricing/reel-pack-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { PageBody, PageHeader, SectionTitle } from "@/components/ui/page";
 import { cn } from "@/lib/cn";
+import { reelPackOn } from "@/lib/dodo";
 import { plural } from "@/lib/format";
 import { visitorCurrency } from "@/lib/region";
 import { studioAvailable } from "@/lib/studio";
@@ -32,7 +34,7 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
 
         <Card>
           <CardHeader title="Your credits" />
-          <CardContent className="grid gap-6 md:grid-cols-2">
+          <CardContent className={cn("grid gap-6", user.reelCredits > 0 ? "md:grid-cols-3" : "md:grid-cols-2")}>
             <div>
               <p className="text-[13px] text-gray-900">Credits left</p>
               <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight">{user.credits}</p>
@@ -41,6 +43,12 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
               <p className="text-[13px] text-gray-900">Enough for</p>
               <p className="mt-1 text-xl font-semibold tracking-tight">{plural(user.credits, "short video")}</p>
             </div>
+            {user.reelCredits > 0 && (
+              <div>
+                <p className="text-[13px] text-gray-900">Reel credits</p>
+                <p className="mt-1 text-xl font-semibold tracking-tight">{plural(user.reelCredits, "reel")}</p>
+              </div>
+            )}
           </CardContent>
           <CardFooter>
             <span className="flex items-center gap-2">
@@ -70,6 +78,14 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
             ))}
           </ul>
         </section>
+
+        {reelPackOn() && (
+          <section id="reels" className="scroll-mt-20">
+            <SectionTitle>For your own reels</SectionTitle>
+            <ReelPackCard currency={currency} checkout owned={user.reelCredits} />
+            <p className="mt-3 text-[13px] text-gray-900">Reel credits make reels only; launch videos use credits. A reel uses a reel credit first, then a credit.</p>
+          </section>
+        )}
 
         <Card>
           <CardHeader title="How credits work" description="1 credit makes one Standard video up to 30 seconds. A revision costs half, rounded up." />

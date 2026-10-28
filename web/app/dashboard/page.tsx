@@ -115,12 +115,12 @@ function FirstVideo() {
         <div>
           <h2 className="text-2xl font-semibold tracking-[-0.03em]">Make your first launch video</h2>
           <p className="mt-2 max-w-lg text-sm text-gray-900">Paste your website or a public GitHub repo. We&apos;ll plan, animate and render a 20-second video from your real product in about 15 minutes.</p>
-          <form action="/dashboard/new" method="get" className="mt-6 flex max-w-lg flex-col gap-2 sm:flex-row">
+          <form action="/dashboard/start" method="get" className="mt-6 flex max-w-lg flex-col gap-2 sm:flex-row">
             <div className="flex-1">
               <Input name="url" placeholder="https://yourproduct.com" prefix={<Globe />} aria-label="Website or repo URL" />
             </div>
             <Button type="submit" variant="primary">
-              Continue <ArrowRight />
+              Make my video <ArrowRight />
             </Button>
           </form>
         </div>

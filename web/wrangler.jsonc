@@ -17,7 +17,10 @@
   ],
   "services": [
     // Self-reference required by OpenNext; must match "name".
-    { "binding": "WORKER_SELF_REFERENCE", "service": "hyped-web" }
+    { "binding": "WORKER_SELF_REFERENCE", "service": "hyped-web" },
+    // The reel editor's chat edits: the render Worker's ReelAssistant entrypoint (RPC only; it holds the model key).
+    // Deploy the render Worker first so the entrypoint exists.
+    { "binding": "REEL_ASSISTANT", "service": "hyped-render", "entrypoint": "ReelAssistant" }
   ],
   "hyperdrive": [
     {

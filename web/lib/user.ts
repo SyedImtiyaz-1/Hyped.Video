@@ -27,6 +27,13 @@ export const requireUser = cache(async () => {
   });
 });
 
+/** The admins' user ids (ADMIN_USER_IDS, comma-separated). */
+export const adminIds = () =>
+  (process.env.ADMIN_USER_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
 export function isAdmin(userId: string) {
-  return (process.env.ADMIN_USER_IDS ?? "").split(",").map((s) => s.trim()).includes(userId);
+  return adminIds().includes(userId);
 }

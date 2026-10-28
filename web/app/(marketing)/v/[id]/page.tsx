@@ -49,7 +49,7 @@ export default async function SharePage({ params }: Props) {
     video.kind === "reel"
       ? { href: "/dashboard/reels", label: "Caption your own reel" }
       : template
-        ? { href: `/dashboard/new?template=${template.id}`, label: `Make yours with ${template.name}` }
+        ? { href: `/dashboard/recipes/${template.id}`, label: `Make yours with ${template.name}` }
         : { href: "/dashboard", label: "Make one for your product" };
   return (
     <main className="mx-auto flex max-w-[1200px] flex-col items-center px-4 py-12 md:px-8 md:py-16">

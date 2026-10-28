@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { creditsForReel, grantCredits, parseLookChanges, REEL_FONTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelFont, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
+import { creditsForReel, grantCredits, parseLookChanges, REEL_CLEANUPS, REEL_EDIT_STYLES, REEL_FONTS, REEL_STRENGTHS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_FONTS, REEL_MAX_SECONDS, REEL_STYLES, spendCredits, type ReelCleanup, type ReelEditStyle, type ReelFont, type ReelStrength, type ReelJob, type ReelLanguage, type ReelStyle } from "@launchreel/core";
 import { getDb, startRender } from "@/lib/db";
 import { isDemo } from "@/lib/demo";
 import { looksLikeVideo, ownsUploadKey, uploadStore } from "@/lib/reel-uploads";
@@ -32,7 +32,13 @@ const Body = z.object({
   zooms: z.boolean().default(true),
   sfx: z.boolean().default(true),
   hook: z.boolean().default(true),
+  broll: z.boolean().default(true),
   language: z.enum(REEL_LANGUAGES as [ReelLanguage, ...ReelLanguage[]]).default("auto"),
+  // How much dead air the first render cuts; every cut can be put back in the editor.
+  cleanup: z.enum(REEL_CLEANUPS as [ReelCleanup, ...ReelCleanup[]]).default("pauses"),
+  // The edit style the reel starts from (its grade, music and cut effects), and how much happens.
+  editStyle: z.enum(REEL_EDIT_STYLES as [ReelEditStyle, ...ReelEditStyle[]]).default("creator"),
+  strength: z.enum(REEL_STRENGTHS as [ReelStrength, ...ReelStrength[]]).default("medium"),
   // Dodo Payments' policy for AI content tools, and the people in the video: the customer confirms they may use it.
   ownershipConfirmed: z.literal(true),
 });
@@ -49,7 +55,7 @@ export async function POST(req: Request) {
   const body = parsed.data;
   if (!ownsUploadKey(user.id, body.key)) return NextResponse.json({ error: "Upload not found" }, { status: 404 });
   const cost = creditsForReel(body.durationSec);
-  if (cost === null) return NextResponse.json({ error: `Reels can be up to ${REEL_MAX_SECONDS / 60} minutes long.` }, { status: 400 });
+  if (cost === null) return NextResponse.json({ error: `Videos can be up to ${REEL_MAX_SECONDS / 60} minutes long.` }, { status: 400 });
 
   const db = await getDb();
   // A double submit finds the reel already started for this upload.
@@ -63,7 +69,9 @@ export async function POST(req: Request) {
   const active = await db.job.count({ where: { userId: user.id, status: { in: ["QUEUED", "RUNNING"] } } });
   if (active >= 3) return NextResponse.json({ error: "You already have 3 videos in progress" }, { status: 429 });
 
-  const paid = await db.creditEntry.count({ where: { userId: user.id, delta: { gt: 0 }, NOT: { reason: "signup_trial" } } });
+  const paid = await db.creditEntry.count({ where: { userId: user.id, reason: { startsWith: "purchase:" } } });
+  // Reel credits (from a reel pack) pay first, then credits; the job remembers which, so a refund goes back there.
+  const paidWith = user.reelCredits >= cost ? "reels" : "credits";
   const { width, height } = body;
   const reel: ReelJob = {
     style: body.style,
@@ -73,7 +81,11 @@ export async function POST(req: Request) {
     zooms: body.zooms,
     sfx: body.sfx,
     hook: body.hook,
+    broll: body.broll,
     language: body.language,
+    cleanup: body.cleanup,
+    editStyle: body.editStyle,
+    strength: body.strength,
     key: body.key,
     fileName: body.fileName,
     bytes: upload.size,
@@ -91,14 +103,15 @@ export async function POST(req: Request) {
       format: width && height ? (height > width * 1.15 ? "vertical" : width > height * 1.15 ? "landscape" : "square") : "vertical",
       durationSec: Math.ceil(body.durationSec),
       creditsCost: cost,
-      watermark: paid === 0, // free trial: this account has never bought credits
+      watermark: paid === 0, // free trial: this account has never bought a pack
+      paidWith,
       music: "none",
       reel,
       status: "QUEUED",
     },
   });
   try {
-    await spendCredits(db, user.id, cost, `job:${job.id}`);
+    await spendCredits(db, user.id, cost, `job:${job.id}`, paidWith);
   } catch {
     await db.job.delete({ where: { id: job.id } });
     return NextResponse.json({ error: "Not enough credits", upgrade: true }, { status: 402 });
@@ -108,7 +121,7 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error(`[reels] could not start render for ${job.id}`, err);
     await db.job.update({ where: { id: job.id }, data: { status: "FAILED", error: "Could not start the render", finishedAt: new Date() } });
-    await grantCredits(db, user.id, cost, `refund:${job.id}`, `refund:${job.id}`);
+    await grantCredits(db, user.id, cost, `refund:${job.id}`, `refund:${job.id}`, paidWith);
     return NextResponse.json({ error: "Rendering is unavailable right now. Your credits were refunded." }, { status: 503 });
   }
   return NextResponse.json({ id: job.id });

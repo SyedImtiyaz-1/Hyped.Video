@@ -2,6 +2,7 @@ import type { Job } from "@launchreel/core";
 import { reelError } from "@launchreel/core/reel";
 import { Hourglass, LoaderCircle, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { ReelPlayer } from "./reel-player";
 
 const FRAME: Record<string, string> = {
   landscape: "aspect-video w-full",
@@ -9,13 +10,16 @@ const FRAME: Record<string, string> = {
   square: "aspect-square h-[min(70vh,560px)] mx-auto max-w-full",
 };
 
-/** The job page's player for a reel (components/video/video-preview.tsx, with a reel's timings and errors). */
-export function ReelPreview({ job }: { job: Job }) {
+/**
+ * The job page's player for a reel (components/video/video-preview.tsx, with a reel's timings and errors). `editHref`,
+ * for a reel that can still be edited, puts "Edit text" over the video.
+ */
+export function ReelPreview({ job, editHref }: { job: Job; editHref?: string }) {
   const frame = FRAME[job.format] ?? FRAME.vertical;
   if (job.videoUrl) {
     return (
       <div className={cn("overflow-hidden rounded-lg border border-gray-alpha-400 bg-black", frame)}>
-        <video src={job.videoUrl} poster={job.posterUrl ?? undefined} controls playsInline preload="metadata" className="size-full" />
+        <ReelPlayer src={job.videoUrl} poster={job.posterUrl ?? undefined} editHref={editHref} />
       </div>
     );
   }

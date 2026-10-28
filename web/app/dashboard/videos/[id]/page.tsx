@@ -2,8 +2,8 @@ import type { Job, Quality } from "@launchreel/core";
 import { voiceById } from "@launchreel/core/voices";
 import { creditsFor } from "@launchreel/core/pricing";
 import { customerError } from "@launchreel/core/engines";
-import { parseReel, reelError } from "@launchreel/core/reel";
-import { ArrowUpRight, Captions, Download, GitBranch, Globe, Upload } from "lucide-react";
+import { parseReel, reelEditable, reelError } from "@launchreel/core/reel";
+import { ArrowUpRight, Captions, Download, GitBranch, Globe, Pencil, Upload } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { REEL_FONT_INFO, REEL_LANGUAGE_LABEL, REEL_STYLE_INFO, reelExtras, reelName } from "@/components/reels/labels";
@@ -78,6 +78,13 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
         actions={
           job.videoUrl && (
             <>
+              {/* A reel can be edited and exported again, free, while its upload is kept. */}
+              {reel && reelEditable(job, reel).ok && (
+                <Link href={`/dashboard/videos/${job.id}/edit`} className={buttonClasses({})}>
+                  <Pencil />
+                  Edit reel
+                </Link>
+              )}
               {/* The share page previews well on X, LinkedIn and WhatsApp; Download still gives the file itself. */}
               <CopyButton value={`${BRAND.url}/v/${job.id}`} label="Copy share link" size="md" />
               {job.captionsUrl && (
@@ -98,7 +105,7 @@ export default async function VideoPage({ params }: { params: Promise<{ id: stri
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="min-w-0 space-y-6">
             <Card>
-              <CardContent className="p-3 md:p-4">{reel ? <ReelPreview job={job} /> : <VideoPreview job={job} />}</CardContent>
+              <CardContent className="p-3 md:p-4">{reel ? <ReelPreview job={job} editHref={reelEditable(job, reel).ok ? `/dashboard/videos/${job.id}/edit` : undefined} /> : <VideoPreview job={job} />}</CardContent>
             </Card>
 
             {job.shareCopy && (

@@ -35,3 +35,18 @@ export async function startRender(jobId: string) {
   const { env } = await getCloudflareContext({ async: true });
   await env.VIDEO_JOBS.create({ id: jobId, params: { jobId } });
 }
+
+/** Starts a re-export of an edited reel: a workflow of its own beside the finished job (exportReel in the render Worker). */
+export async function startExport(jobId: string, revision: number) {
+  if (process.env.NODE_ENV === "development" && process.env.DEV_RENDER_URL) {
+    const res = await fetch(`${process.env.DEV_RENDER_URL}/dev/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-dev-start-token": process.env.DEV_START_TOKEN ?? "" },
+      body: JSON.stringify({ jobId, export: revision }),
+    }).catch(() => null);
+    if (!res?.ok) throw new Error("The local render Worker didn't start the export. Is `npm run dev:render` running?");
+    return;
+  }
+  const { env } = await getCloudflareContext({ async: true });
+  await env.VIDEO_JOBS.create({ id: `${jobId}-e${revision}`, params: { jobId, export: revision } });
+}

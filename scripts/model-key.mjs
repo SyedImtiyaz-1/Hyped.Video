@@ -4,6 +4,8 @@
 //
 //   npm run openai-key       (Standard videos and reel captions: platform.openai.com → API keys)
 //   npm run anthropic-key    (Studio videos: console.anthropic.com → API keys)
+//   npm run pexels-key       (stock B-roll in reels: pexels.com/api → Your API key)
+//   npm run pixabay-key      (stock B-roll in reels: pixabay.com/api/docs, logged in → the key under Parameters)
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -22,11 +24,26 @@ const PROVIDERS = {
     shape: /^sk-ant-[A-Za-z0-9_-]{20,}$/,
     check: (key) => fetch("https://api.anthropic.com/v1/models", { headers: { "x-api-key": key, "anthropic-version": "2023-06-01" } }),
   },
+  pexels: {
+    name: "PEXELS_API_KEY",
+    label: "Pexels",
+    where: "pexels.com/api → Your API key",
+    shape: /^[A-Za-z0-9]{40,64}$/,
+    check: (key) => fetch("https://api.pexels.com/videos/search?query=office&per_page=1", { headers: { authorization: key } }),
+  },
+  pixabay: {
+    name: "PIXABAY_API_KEY",
+    label: "Pixabay",
+    where: "pixabay.com/api/docs, logged in: the key under Parameters",
+    shape: /^[0-9]{3,12}-[0-9A-Za-z]{16,48}$/,
+    // Pixabay takes the key in the address; the address is never printed.
+    check: (key) => fetch(`https://pixabay.com/api/videos/?key=${encodeURIComponent(key)}&q=office&per_page=3`),
+  },
 };
 
 const provider = PROVIDERS[process.argv[2]];
 if (!provider) {
-  console.log("Usage: node scripts/model-key.mjs openai|anthropic");
+  console.log("Usage: node scripts/model-key.mjs openai|anthropic|pexels|pixabay");
   process.exit(1);
 }
 
@@ -67,10 +84,18 @@ text = line.test(text) ? text.replace(line, () => `${provider.name}=${key}`) : `
 writeFileSync(file, text, { mode: 0o600 });
 console.log("✓ Saved in .env.");
 
+// The local render Worker (`wrangler dev`) reads its own copy in render/.dev.vars: keep it in step, if there is one.
+const devVars = new URL("../render/.dev.vars", import.meta.url);
+if (existsSync(devVars)) {
+  const vars = readFileSync(devVars, "utf8");
+  writeFileSync(devVars, line.test(vars) ? vars.replace(line, () => `${provider.name}=${key}`) : `${vars.replace(/\n?$/, "\n")}${provider.name}=${key}\n`, { mode: 0o600 });
+  console.log("✓ Saved in render/.dev.vars for local renders.");
+}
+
 // Production: straight to Wrangler over stdin.
 const put = spawnSync("npx", ["wrangler", "secret", "put", provider.name], { cwd: new URL("../render/", import.meta.url), input: key, encoding: "utf8" });
 if (put.status !== 0) {
-  console.log(`✗ Couldn't upload it to the render Worker. Run \`npm run secrets\` to retry. (${(put.stderr || "").replace(/sk-[A-Za-z0-9_-]+/g, "[key]").trim().split("\n").pop()})`);
+  console.log(`✗ Couldn't upload it to the render Worker. Run \`npm run secrets\` to retry. (${(put.stderr || "").replaceAll(key, "[key]").replace(/sk-[A-Za-z0-9_-]+/g, "[key]").trim().split("\n").pop()})`);
   process.exit(1);
 }
 console.log(`✓ Live on the render Worker: new videos use it right away.`);

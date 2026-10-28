@@ -31,6 +31,8 @@
     "deploy:web": "node scripts/deploy-web.mjs",
     "music:add": "node scripts/music-add.mjs",
     "openai-key": "node scripts/model-key.mjs openai",
-    "anthropic-key": "node scripts/model-key.mjs anthropic"
+    "anthropic-key": "node scripts/model-key.mjs anthropic",
+    "pexels-key": "node scripts/model-key.mjs pexels",
+    "pixabay-key": "node scripts/model-key.mjs pixabay"
   }
 }

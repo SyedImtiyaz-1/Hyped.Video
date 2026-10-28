@@ -15,11 +15,20 @@ export type ShowcaseVideo = {
   format: Template["format"];
   durationSec: number;
   voice: boolean;
+  /** Shown on its template's card only, not in the "Made with Hyped" gallery (a teaser that says "coming soon"). */
+  gallery?: false;
 };
 
 export const SHOWCASE: readonly ShowcaseVideo[] = [
   { id: "cmuo53uiq000louici7g2ta4h", template: "launch-day", product: "autoapply.in", format: "landscape", durationSec: 60, voice: true },
+  { id: "cmus8frem0009oufwfpyjq0nr", template: "problem-solution", product: "hyped.video", format: "vertical", durationSec: 30, voice: true },
+  { id: "cmus8fre70003oufwod3jw8or", template: "three-features", product: "hyped.video", format: "square", durationSec: 30, voice: true },
+  { id: "cmus8freq000boufw3slpyvda", template: "before-after", product: "hyped.video", format: "vertical", durationSec: 20, voice: false },
   { id: "cmuo53uhi0007ouicxewkq6xd", template: "feature-drop", product: "hyped.video", format: "landscape", durationSec: 20, voice: false },
+  { id: "cmus8frei0007oufwdk6g8a85", template: "walkthrough", product: "hyped.video", format: "landscape", durationSec: 90, voice: true },
+  { id: "cmus8frev000doufws0gcyn8h", template: "founder-demo", product: "hyped.video", format: "landscape", durationSec: 60, voice: true },
+  { id: "cmus8frdb0001oufwlbvfsns2", template: "launch-day", product: "hyped.video", format: "landscape", durationSec: 60, voice: true },
+  { id: "cmus8fred0005oufwdzg3zwue", template: "teaser", product: "hyped.video", format: "vertical", durationSec: 15, voice: false, gallery: false },
 ];
 
 /** The homepage hero: a launch film Hyped made of a real product (the owner's AutoApply). */

@@ -12,7 +12,7 @@
 // Reels (job.kind "reel") take the same route with no agent: the customer's upload goes from R2 into the container,
 // where runner/src/reel.ts captions and edits it in a few minutes.
 import { getSandbox, Sandbox } from "@cloudflare/sandbox";
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { WorkerEntrypoint, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import { sendFailureAlert, sendJobEmail } from "./email";
 import {
@@ -25,11 +25,20 @@ import {
   parseSealedToken,
   redactSecrets,
   REEL_PLAN_MODEL,
+  CHAT_SCHEMA,
+  CHAT_SYSTEM,
+  BROLL_SOURCES,
+  parseClip,
+  stockClips,
+  stockSearchUrl,
+  type BrollClip,
+  type BrollSource,
   REEL_UPLOAD_TYPES,
   reelSecondsFor,
   type Engine,
   type JobResult,
   type JobSpec,
+  type ReelExport,
   type ReelSpec,
   type RepoTokenJwk,
 } from "@launchreel/core";
@@ -38,6 +47,9 @@ import {
 export { ContainerProxy } from "@cloudflare/sandbox";
 
 /** One container per video. */
+
+/** The balance a job was paid from, for its refund (jobs from before reel packs paid with credits). */
+const balanceOf = (paidWith: string | undefined): "credits" | "reels" => (paidWith === "reels" ? "reels" : "credits");
 export class VideoSandbox extends Sandbox<Env> {}
 
 // Virtual hosts: they never leave Cloudflare and need no TLS trust inside the container.
@@ -45,6 +57,9 @@ const ANTHROPIC_HOST = "anthropic.internal";
 const OPENAI_HOST = "openai.internal";
 // Word timings for voiceover captions: speech recognition on Workers AI, so the audio never leaves Cloudflare.
 const TIMINGS_HOST = "timings.internal";
+// Stock B-roll searches for reels: answered here (searchBroll, with this Worker's key and cache); the footage itself
+// downloads from the library's public URLs.
+const BROLL_HOST = "broll.internal";
 
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -102,9 +117,14 @@ VideoSandbox.outboundByHost = {
       h.delete("x-api-key");
     }),
   [TIMINGS_HOST]: (request: Request, env: Env) => wordTimings(request, env),
+  [BROLL_HOST]: async (request: Request, env: Env) => {
+    const url = new URL(request.url);
+    return Response.json(await searchBroll(env, { query: url.searchParams.get("query") ?? "", portrait: url.searchParams.get("portrait") === "1" }));
+  },
 };
 
-type Params = { jobId: string };
+/** A job to run, or (`export`) a re-export of an edited reel: its revision, in Job.reel.export. */
+type Params = { jobId: string; export?: number };
 
 const POLL_EVERY = "45 seconds";
 const POLL_SECONDS = 45;
@@ -114,7 +134,9 @@ const STALE_RUNNING_MINUTES = 210; // longer than two long attempts, so the cron
 const MAX_REPO_BYTES = 500 * 1024 * 1024; // private repo downloads
 // Reels take 1-3 minutes, so they're checked more often and stopped sooner.
 const REEL_POLL_EVERY = "20 seconds";
-const REEL_MAX_POLLS = 75; // ~25 minutes
+const REEL_MAX_POLLS = 75; // ~25 minutes, for reels up to 3 minutes
+/** Polls for a reel of this length: ~25 minutes, plus ~4 minutes per minute of video (up to 20 minutes: ~105 minutes). */
+const reelPolls = (durationSec: number) => REEL_MAX_POLLS + Math.ceil(Math.max(0, durationSec - 180) / 60) * 12;
 
 /** Passes a stream through, failing it once more than `max` bytes have gone by. */
 function limitBytes(max: number) {
@@ -145,6 +167,8 @@ function engineFor(env: Env, quality: string): { engine: Engine; model: string }
 export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
     const { jobId } = event.payload;
+    // A re-export runs beside the finished job, which keeps its status and video until the new one replaces it.
+    if (event.payload.export) return this.exportReel(jobId, event.payload.export, step);
 
     const job = await step.do("claim job", async () => {
       const db = createDb(this.env.HYPERDRIVE.connectionString);
@@ -176,6 +200,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         template: j.template,
         kind: j.kind,
         reel: j.reel,
+        paidWith: j.paidWith,
       };
     });
     if (!job) return;
@@ -330,7 +355,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
           });
         } else {
           await db.job.update({ where: { id: jobId }, data: { ...done, status: "FAILED", error: redactSecrets(outcome.error ?? "Render failed").slice(0, 2000) } });
-          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
         }
       });
     } catch (err) {
@@ -338,7 +363,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
       await step.do("fail and refund", async () => {
         const db = createDb(this.env.HYPERDRIVE.connectionString);
         await db.job.update({ where: { id: jobId }, data: { status: "FAILED", error: redactSecrets(`Render error: ${String(err)}`).slice(0, 500), finishedAt: new Date() } });
-        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
       });
     }
 
@@ -373,7 +398,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
    * land under a video's names, so the media route and the video page work as they are. The upload is deleted once
    * the reel is delivered; a failed reel keeps it for support until the bucket's uploads/ lifecycle rule clears it.
    */
-  private async reel(jobId: string, job: { userId: string; creditsCost: number; watermark: boolean; reel: unknown }, step: WorkflowStep) {
+  private async reel(jobId: string, job: { userId: string; creditsCost: number; watermark: boolean; reel: unknown; paidWith?: string }, step: WorkflowStep) {
     const processId = "render-reel";
     const reel = parseReel(job.reel);
     let finished = false;
@@ -390,7 +415,7 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
         const spec: ReelSpec = {
           jobId,
           input,
-          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, language: reel.language },
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, broll: reel.broll, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
           // The container measures the real length: longer than the credits cover fails, and is refunded.
           maxSeconds: reelSecondsFor(job.creditsCost) + 1,
           watermark: job.watermark,
@@ -409,12 +434,14 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
             OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`,
             OPENAI_API_KEY: "added-by-worker",
             HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`,
+            // Stock B-roll searches; the footage downloads from the library's public URLs.
+            BROLL_SEARCH_URL: `http://${BROLL_HOST}/search`,
             PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
           },
         });
       });
 
-      for (let i = 0; i < REEL_MAX_POLLS && !finished; i++) {
+      for (let i = 0; i < reelPolls(reel?.durationSec ?? 0) && !finished; i++) {
         await step.sleep(`wait reel ${i}`, REEL_POLL_EVERY);
         finished = await step.do(`check reel ${i}`, async () => {
           const proc = await sandboxFor(this.env, jobId).getProcess(processId);
@@ -442,6 +469,9 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
                 captionsUrl: result.files.captions ? await this.store(sandbox, result.files.captions, `jobs/${jobId}/captions.srt`, "application/x-subrip") : null,
               }
             : null;
+        // For the editor: the reel's decisions and a small clean preview. Private: the media route serves brag.* only.
+        if (media && result.files.edit) await this.store(sandbox, result.files.edit, `jobs/${jobId}/edit.json`, "application/json");
+        if (media && result.files.preview) await this.store(sandbox, result.files.preview, `jobs/${jobId}/preview.mp4`, "video/mp4");
         return {
           ok: Boolean(media),
           error: media ? null : (result.error ?? "Reel failed"),
@@ -467,28 +497,129 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
           await db.job.update({ where: { id: jobId }, data: { ...done, ...attempt.media, status: "SUCCEEDED", plan: attempt.plan } });
         } else {
           await db.job.update({ where: { id: jobId }, data: { ...done, status: "FAILED", error: redactSecrets(attempt.error ?? "Reel failed").slice(0, 2000) } });
-          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+          await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
         }
       });
-      // The finished reel is what the customer keeps; their raw upload (up to 500 MB) goes.
-      if (attempt.media) {
-        await step.do("delete upload", async () => {
-          await this.env.VIDEOS.delete(reel.key);
-        });
-      }
+      // The upload stays, so the reel can be edited and re-exported for free: the bucket's lifecycle rule for uploads/
+      // deletes it after REEL_EDIT_DAYS (7 days).
     } catch (err) {
       // A step ran out of retries: fail the job and give the credits back. The message keeps its customer-facing
       // prefix ("Upload missing: ...") for reelError().
       await step.do("fail and refund", async () => {
         const db = createDb(this.env.HYPERDRIVE.connectionString);
         await db.job.update({ where: { id: jobId }, data: { status: "FAILED", error: redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 500), finishedAt: new Date() } });
-        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`);
+        await grantCredits(db, job.userId, job.creditsCost, `refund:${jobId}`, `refund:${jobId}`, balanceOf(job.paidWith));
       });
     }
 
     await this.emailCustomer(jobId, step);
     await step.do("destroy sandbox", async () => {
       await sandboxFor(this.env, jobId).destroy();
+    });
+  }
+
+  /**
+   * A re-export of an edited reel: the kept upload and the customer's edits (jobs/<id>/edit.json, written by the web
+   * app) rendered again, without speech recognition or planning, in a sandbox of its own. It's free, so nothing is
+   * charged or refunded; the job stays SUCCEEDED with its current video until the new one replaces it, and only
+   * Job.reel.export follows this run. A newer export supersedes an older one still running.
+   */
+  private async exportReel(jobId: string, revision: number, step: WorkflowStep) {
+    const processId = "export-reel";
+    const sandboxId = `${jobId}-e${revision}`;
+    const setExport = async (patch: Partial<ReelExport>) => {
+      const db = createDb(this.env.HYPERDRIVE.connectionString);
+      const j = await db.job.findUnique({ where: { id: jobId }, select: { reel: true } });
+      const reel = (j?.reel ?? {}) as Record<string, unknown>;
+      const current = (reel.export ?? {}) as Partial<ReelExport>;
+      if (current.revision !== revision) return; // superseded by a newer export
+      await db.job.update({ where: { id: jobId }, data: { reel: { ...reel, export: { ...current, ...patch } } as object } });
+    };
+    let finished = false;
+    try {
+      const job = await step.do("load export", async () => {
+        const db = createDb(this.env.HYPERDRIVE.connectionString);
+        const j = await db.job.findUnique({ where: { id: jobId } });
+        const reel = j && j.kind === "reel" ? parseReel(j.reel) : null;
+        if (!j || !reel) throw new NonRetryableError(`Reel ${jobId} not found`);
+        if (reel.export?.revision !== revision) throw new NonRetryableError("Superseded by a newer export");
+        return { creditsCost: j.creditsCost, watermark: j.watermark, reel: j.reel };
+      });
+      const reel = parseReel(job.reel)!;
+
+      await step.do("start export", { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        const sandbox = sandboxFor(this.env, sandboxId);
+        if (await sandbox.getProcess(processId)) return;
+        const upload = await this.env.VIDEOS.get(reel.key);
+        if (!upload) throw new NonRetryableError(`Upload missing: ${reel.key}`);
+        const edit = await this.env.VIDEOS.get(`jobs/${jobId}/edit.json`);
+        if (!edit) throw new NonRetryableError("Edit missing: the reel's edits weren't saved");
+        const input = `input.${reel.key.split(".").pop()}`;
+        await sandbox.exec("rm -rf /workspace/out /workspace/work /workspace/result.json /workspace/input.* /workspace/edit.json");
+        await sandbox.writeFile(`/workspace/${input}`, upload.body);
+        await sandbox.writeFile("/workspace/edit.json", await edit.text());
+        const spec: ReelSpec = {
+          jobId,
+          input,
+          options: { style: reel.style, look: reel.look, fonts: reel.fonts, emojis: reel.emojis, zooms: reel.zooms, sfx: reel.sfx, hook: reel.hook, broll: reel.broll, language: reel.language, cleanup: reel.cleanup, editStyle: reel.editStyle, strength: reel.strength },
+          maxSeconds: reelSecondsFor(job.creditsCost) + 1,
+          watermark: job.watermark,
+          watermarkText: `Made with ${this.env.BRAND_NAME}`,
+          model: REEL_PLAN_MODEL,
+          edit: true,
+        };
+        await sandbox.writeFile("/workspace/reel.json", JSON.stringify(spec));
+        await sandbox.exec("chown -R agent:agent /workspace");
+        await sandbox.startProcess("runuser -u agent -- node /app/dist/reel.mjs", {
+          processId,
+          cwd: "/workspace",
+          env: { HOME: "/home/agent", JOB_ROOT: "/workspace", OPENAI_BASE_URL: `http://${OPENAI_HOST}/v1`, OPENAI_API_KEY: "added-by-worker", HYPED_TIMINGS_URL: `http://${TIMINGS_HOST}/words`, BROLL_SEARCH_URL: `http://${BROLL_HOST}/search`, PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright" },
+        });
+      });
+
+      for (let i = 0; i < reelPolls(parseReel(job.reel)?.durationSec ?? 0) && !finished; i++) {
+        await step.sleep(`wait export ${i}`, REEL_POLL_EVERY);
+        finished = await step.do(`check export ${i}`, async () => {
+          const proc = await sandboxFor(this.env, sandboxId).getProcess(processId);
+          return !proc || !(proc.status === "running" || proc.status === "starting");
+        });
+      }
+      if (!finished) await step.do("stop export", async () => void (await sandboxFor(this.env, sandboxId).killProcess(processId).catch(() => {})));
+
+      const attempt = await step.do("collect export", { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        const sandbox = sandboxFor(this.env, sandboxId);
+        const result = await sandbox
+          .readFile("/workspace/result.json")
+          .then((f) => JSON.parse(f.content) as JobResult)
+          .catch(() => null);
+        if (!result?.ok || !result.files.video) return { media: null, plan: null, error: result?.error ?? (finished ? "The export stopped without a result" : "The export took too long") };
+        // Same names, so the share page and every link show the new version; ?v= gets past browser caches.
+        const v = `?v=${revision}`;
+        const media = {
+          videoUrl: (await this.store(sandbox, result.files.video, `jobs/${jobId}/brag.mp4`, "video/mp4")) + v,
+          posterUrl: result.files.poster ? (await this.store(sandbox, result.files.poster, `jobs/${jobId}/brag.jpg`, "image/jpeg")) + v : null,
+          captionsUrl: result.files.captions ? (await this.store(sandbox, result.files.captions, `jobs/${jobId}/captions.srt`, "application/x-subrip")) + v : null,
+        };
+        if (result.files.edit) await this.store(sandbox, result.files.edit, `jobs/${jobId}/edit.json`, "application/json");
+        return { media, plan: result.plan, error: null };
+      });
+
+      await step.do("finish export", async () => {
+        if (attempt.media) {
+          const db = createDb(this.env.HYPERDRIVE.connectionString);
+          await db.job.update({ where: { id: jobId }, data: { ...attempt.media, plan: attempt.plan } });
+          await setExport({ status: "done", finishedAt: new Date().toISOString() });
+        } else {
+          await setExport({ status: "failed", finishedAt: new Date().toISOString(), error: redactSecrets(attempt.error ?? "Export failed").slice(0, 500) });
+        }
+      });
+    } catch (err) {
+      await step.do("fail export", async () => {
+        await setExport({ status: "failed", finishedAt: new Date().toISOString(), error: redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 500) });
+      });
+    }
+    await step.do("destroy export sandbox", async () => {
+      await sandboxFor(this.env, sandboxId).destroy();
     });
   }
 
@@ -539,7 +670,20 @@ export class VideoJobWorkflow extends WorkflowEntrypoint<Env, Params> {
  */
 async function serveMedia(request: Request, env: Env, key: string): Promise<Response> {
   if (!/^jobs\/[a-z0-9]+\/(brag\.mp4|brag\.jpg|captions\.srt)$/.test(key)) return new Response("Not found", { status: 404 });
-  const object = await env.VIDEOS.get(key, { range: request.headers, onlyIf: request.headers });
+  return serveFile(request, env, key);
+}
+
+/** A file from the bucket, with conditional requests and ranges (so players can seek). */
+async function serveFile(request: Request, env: Env, key: string): Promise<Response> {
+  let object;
+  try {
+    object = await env.VIDEOS.get(key, { range: request.headers, onlyIf: request.headers });
+  } catch (err) {
+    // A failing bucket (a missing binding, a deleted or renamed bucket, R2 itself) would otherwise surface as a bare
+    // Cloudflare 1101 on every video: log what R2 said, so Workers Logs shows the cause, and answer with a retryable 503.
+    console.error(`[media] R2 get failed for ${key}:`, err instanceof Error ? `${err.name}: ${err.message}` : err);
+    return new Response("Media is temporarily unavailable", { status: 503, headers: { "retry-after": "60", "cache-control": "no-store" } });
+  }
   if (!object) return new Response("Not found", { status: 404 });
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -594,9 +738,122 @@ async function devUploads(request: Request, env: Env, url: URL): Promise<Respons
   return new Response("Not found", { status: 404 });
 }
 
+const EDITOR_FILE = /^jobs\/[a-z0-9]+\/(edit\.json|preview\.mp4)$/;
+
+/**
+ * Local development only: the reel editor's files (web/lib/reel-edits.ts) in this Worker's bucket, read (with ranges,
+ * for the preview player) and written by the web app's `next dev`. Off unless DEV_START_TOKEN is set, like /dev/start.
+ */
+async function devFiles(request: Request, env: Env, key: string): Promise<Response> {
+  if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+  if (!EDITOR_FILE.test(key)) return new Response("Bad key", { status: 400 });
+  if (request.method === "PUT") {
+    await env.VIDEOS.put(key, await request.arrayBuffer(), { httpMetadata: { contentType: request.headers.get("content-type") ?? "application/octet-stream" } });
+    return Response.json({ ok: true });
+  }
+  return serveFile(request, env, key);
+}
+
+/** What a chat edit sends: the reel as the LLM reads it (chatContext) and the customer's message. */
+type ReelChatInput = { context: string; message: string };
+/** What comes back, unchecked: the web app checks the changes against the reel (parseChatOps) before using them. */
+type ReelChatResult = { reply: string; ops: unknown[]; inputTokens: number; outputTokens: number };
+
+/** One chat edit: the reel and the message to the plan's small model, with this Worker's key (the web app has none). */
+async function reelChat(env: Env, input: ReelChatInput): Promise<ReelChatResult> {
+  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set on the render Worker");
+  const context = String(input.context ?? "").slice(0, 60_000);
+  const message = String(input.message ?? "").slice(0, 1000);
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: REEL_PLAN_MODEL,
+      reasoning_effort: "low",
+      messages: [
+        { role: "system", content: CHAT_SYSTEM },
+        { role: "user", content: `${context}\n\nThe creator asks: ${message}` },
+      ],
+      response_format: { type: "json_schema", json_schema: { name: "reel_chat", strict: true, schema: CHAT_SCHEMA } },
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) throw new Error(`The assistant failed (${res.status}): ${redactSecrets((await res.text()).slice(0, 200))}`);
+  const body = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+  const parsed = JSON.parse(body.choices?.[0]?.message?.content ?? "{}") as { reply?: unknown; ops?: unknown };
+  return { reply: String(parsed.reply ?? "").slice(0, 600), ops: Array.isArray(parsed.ops) ? parsed.ops : [], inputTokens: body.usage?.prompt_tokens ?? 0, outputTokens: body.usage?.completion_tokens ?? 0 };
+}
+
+/** Stock footage for a search: clips, or why there are none (`status`: 503 not set up, 429 the library's rate limit, 502 it failed). */
+export type BrollSearch = { clips: BrollClip[]; error?: string; status?: 429 | 502 | 503 };
+
+// Searches are kept a day: Pixabay asks for it, and it spares both libraries' rate limits. In the bucket under
+// cache/, which serveMedia never serves.
+const BROLL_CACHE_MS = 24 * 3600 * 1000;
+
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Stock footage for a search, as clips for the reel's orientation (at least 3 seconds long, the best fits first), from
+ * the library this Worker has a key for: Pexels first (it searches by orientation), else Pixabay. The editor and the
+ * runner both search here, so the keys stay in this Worker.
+ */
+async function searchBroll(env: Env, input: { query: string; portrait: boolean }): Promise<BrollSearch> {
+  const source: BrollSource | null = env.PEXELS_API_KEY ? "pexels" : env.PIXABAY_API_KEY ? "pixabay" : null;
+  if (!source) return { clips: [], error: "Stock B-roll isn't set up yet.", status: 503 };
+  const query = String(input.query ?? "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 80);
+  if (!query) return { clips: [] };
+  const cacheKey = `cache/broll/${source}/${input.portrait ? "portrait" : "landscape"}/${await sha256(query)}.json`;
+  const cached = await env.VIDEOS.get(cacheKey).catch(() => null);
+  if (cached && Date.now() - cached.uploaded.getTime() < BROLL_CACHE_MS) {
+    const clips = ((await cached.json().catch(() => [])) as unknown[]).map((c) => parseClip(c)).filter((c): c is BrollClip => c !== null);
+    return { clips };
+  }
+  const url = stockSearchUrl(source, query, input.portrait);
+  const res = await fetch(source === "pixabay" ? `${url}&key=${encodeURIComponent(env.PIXABAY_API_KEY ?? "")}` : url, {
+    headers: source === "pexels" ? { authorization: env.PEXELS_API_KEY ?? "" } : {},
+    signal: AbortSignal.timeout(15_000),
+  }).catch(() => null);
+  if (res?.status === 429) return { clips: [], error: "Stock search is busy right now. Try again in a few minutes.", status: 429 };
+  if (!res?.ok) return { clips: [], error: `${BROLL_SOURCES[source].label} didn't answer (${res?.status ?? "no answer"})`, status: 502 };
+  const clips = stockClips(source, await res.json().catch(() => null), input.portrait);
+  await env.VIDEOS.put(cacheKey, JSON.stringify(clips), { httpMetadata: { contentType: "application/json" } }).catch(() => {});
+  return { clips };
+}
+
+/**
+ * The reel editor's assistant for the web app (its REEL_ASSISTANT service binding to this entrypoint): chat edits, and
+ * stock B-roll searches. RPC only: no URL reaches it, so only the web Worker can ask, after it has checked who's asking.
+ */
+export class ReelAssistant extends WorkerEntrypoint<Env> {
+  async chat(input: ReelChatInput): Promise<ReelChatResult> {
+    return reelChat(this.env, input);
+  }
+  async searchBroll(input: { query: string; portrait: boolean }): Promise<BrollSearch> {
+    return searchBroll(this.env, input);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // Local development only, like /dev/start: the web app's `next dev` asks for B-roll searches and chat edits here.
+    if (request.method === "POST" && url.pathname === "/dev/broll-search") {
+      if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+      return Response.json(await searchBroll(env, (await request.json()) as { query: string; portrait: boolean }));
+    }
+    if (request.method === "POST" && url.pathname === "/dev/reel-chat") {
+      if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
+      try {
+        return Response.json(await reelChat(env, (await request.json()) as ReelChatInput));
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
+      }
+    }
+    if (url.pathname.startsWith("/dev/files/")) return devFiles(request, env, decodeURIComponent(url.pathname.slice("/dev/files/".length)));
     if (request.method === "GET" && url.pathname.startsWith("/media/")) return serveMedia(request, env, decodeURIComponent(url.pathname.slice(7)));
     if (request.method === "GET" && url.pathname.startsWith("/jobs/")) return serveMedia(request, env, decodeURIComponent(url.pathname.slice(1)));
     if (url.pathname.startsWith("/dev/uploads/")) return devUploads(request, env, url);
@@ -604,9 +861,10 @@ export default {
     // here. Off unless DEV_START_TOKEN is set, which only happens in render/.dev.vars; production never has it.
     if (request.method === "POST" && url.pathname === "/dev/start") {
       if (!env.DEV_START_TOKEN || request.headers.get("x-dev-start-token") !== env.DEV_START_TOKEN) return new Response("Not found", { status: 404 });
-      const { jobId } = (await request.json().catch(() => ({}))) as { jobId?: string };
+      const { jobId, export: revision } = (await request.json().catch(() => ({}))) as { jobId?: string; export?: number };
       if (!jobId || !/^[a-z0-9]+$/.test(jobId)) return new Response("Bad job id", { status: 400 });
-      await env.VIDEO_JOBS.create({ id: jobId, params: { jobId } });
+      if (revision !== undefined && !(Number.isInteger(revision) && revision > 0)) return new Response("Bad revision", { status: 400 });
+      await env.VIDEO_JOBS.create(revision ? { id: `${jobId}-e${revision}`, params: { jobId, export: revision } } : { id: jobId, params: { jobId } });
       return Response.json({ ok: true });
     }
     return new Response("render worker: ok");
@@ -626,7 +884,7 @@ export default {
     });
     for (const job of stale) {
       await db.job.update({ where: { id: job.id }, data: { status: "FAILED", error: "Render timed out", finishedAt: new Date() } });
-      await grantCredits(db, job.userId, job.creditsCost, `refund:${job.id}`, `refund:${job.id}`);
+      await grantCredits(db, job.userId, job.creditsCost, `refund:${job.id}`, `refund:${job.id}`, balanceOf(job.paidWith));
       await sandboxFor(env, job.id).destroy().catch(() => {});
       await sendJobEmail(env, db, job.id).catch((err) => console.error(`job ${job.id}: email not sent: ${redactSecrets(String(err)).slice(0, 300)}`));
       await sendFailureAlert(env, db, job.id).catch((err) => console.error(`job ${job.id}: alert not sent: ${redactSecrets(String(err)).slice(0, 300)}`));

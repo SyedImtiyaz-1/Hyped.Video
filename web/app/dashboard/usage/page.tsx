@@ -18,10 +18,12 @@ export default async function UsagePage() {
   const videos30 = daily.reduce((a, d) => a + d.videos, 0);
   const revisions30 = daily.reduce((a, d) => a + d.revisions, 0);
   const peak = Math.max(1, ...daily.map((d) => d.videos + d.revisions));
-  let balance = user.credits;
+  // Running balances, newest first: credits and reel credits each count on their own.
+  const balances = { credits: user.credits, reels: user.reelCredits };
   const rows = ledger.map((e) => {
-    const row = { ...e, balance };
-    balance -= e.delta;
+    const kind: "credits" | "reels" = e.balance === "reels" ? "reels" : "credits";
+    const row = { ...e, kind, after: balances[kind] };
+    balances[kind] -= e.delta;
     return row;
   });
 
@@ -86,7 +88,8 @@ export default async function UsagePage() {
               </thead>
               <tbody className="divide-y divide-gray-alpha-400">
                 {rows.map((e) => {
-                  const d = describeEntry(e.reason);
+                  const d = describeEntry(e.reason, e.kind);
+                  const unit = e.kind === "reels" ? " reels" : "";
                   return (
                     <tr key={e.id}>
                       <td className="whitespace-nowrap px-5 py-3 text-gray-900">{formatDateTime(e.createdAt)}</td>
@@ -101,8 +104,12 @@ export default async function UsagePage() {
                       </td>
                       <td className={cn("whitespace-nowrap px-5 py-3 text-right font-mono tabular-nums", e.delta > 0 ? "text-green-900" : "text-gray-1000")}>
                         {e.delta > 0 ? `+${e.delta}` : e.delta}
+                        {unit}
                       </td>
-                      <td className="whitespace-nowrap px-5 py-3 text-right font-mono tabular-nums text-gray-900">{e.balance}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-right font-mono tabular-nums text-gray-900">
+                        {e.after}
+                        {unit}
+                      </td>
                     </tr>
                   );
                 })}

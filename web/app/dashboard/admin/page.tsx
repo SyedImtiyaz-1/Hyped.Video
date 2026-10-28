@@ -1,4 +1,4 @@
-import { INDIA_GST, INR_PER_USD_ESTIMATE, PACKS, unitEconomics, type PackKey } from "@launchreel/core";
+import { INDIA_GST, INR_PER_USD_ESTIMATE, PACKS, REEL_PACKS, unitEconomics, type PackKey } from "@launchreel/core";
 import { purchasedPacks } from "@/lib/ledger";
 import { getDb } from "@/lib/db";
 import { notFound, redirect } from "next/navigation";
@@ -7,7 +7,8 @@ import { PageBody, PageHeader } from "@/components/ui/page";
 import { StatusDot } from "@/components/ui/status";
 import { isDemo } from "@/lib/demo";
 import { hostOf } from "@/lib/format";
-import { isAdmin, requireUser } from "@/lib/user";
+import { funnelByWeek } from "@/lib/funnel";
+import { adminIds, isAdmin, requireUser } from "@/lib/user";
 import { Stat } from "../stat";
 
 export const metadata = { title: "Admin" };
@@ -29,18 +30,24 @@ export default async function Admin() {
   const avg = (f: (j: (typeof jobs)[number]) => number | null) => (done.length ? done.reduce((a, j) => a + (f(j) ?? 0), 0) / done.length : 0);
   const p90 = done.map((j) => unitEconomics(j).total).sort((a, b) => a - b)[Math.floor(done.length * 0.9)] ?? 0;
   // Pack revenue by currency: the ledger records the packs, plus "@INR" for rupees ("purchase:CREATOR@INR").
-  const purchases = await db.creditEntry.findMany({ where: { reason: { startsWith: "purchase:" }, createdAt: { gte: since } }, select: { reason: true } });
+  // A payment's credits and reel credits are separate lines with the same reason: each counts only its own packs.
+  const purchases = await db.creditEntry.findMany({ where: { reason: { startsWith: "purchase:" }, createdAt: { gte: since } }, select: { reason: true, balance: true } });
   const revenue = { usd: 0, inr: 0 };
   for (const p of purchases) {
-    const { keys, currency } = purchasedPacks(p.reason.slice("purchase:".length));
-    for (const k of keys) {
-      if (currency === "INR") revenue.inr += PACKS[k].priceInr;
-      else revenue.usd += PACKS[k].priceUsd;
+    const { keys, reelKeys, currency } = purchasedPacks(p.reason.slice("purchase:".length));
+    const prices = p.balance === "reels" ? reelKeys.map((k) => REEL_PACKS[k]) : keys.map((k) => PACKS[k]);
+    for (const price of prices) {
+      if (currency === "INR") revenue.inr += price.priceInr;
+      else revenue.usd += price.priceUsd;
     }
   }
   // What one credit costs us: 30-day cost over the credits that delivered videos used.
   const creditsUsed = done.reduce((a, j) => a + j.creditsCost, 0);
   const costPerCredit = creditsUsed ? totalCogs / creditsUsed : 0;
+  // The launch funnel by week of sign-up; the plan's targets are 40% making a video within a day and 5% buying.
+  const funnel = await funnelByWeek(6, adminIds());
+  const total = funnel.reduce((a, w) => ({ signups: a.signups + w.signups, madeVideo: a.madeVideo + w.madeVideo, within24h: a.within24h + w.within24h, bought: a.bought + w.bought }), { signups: 0, madeVideo: 0, within24h: 0, bought: 0 });
+  const share = (n: number, of: number) => (of ? `${n} · ${Math.round((n / of) * 100)}%` : "—");
 
   return (
     <>
@@ -55,6 +62,50 @@ export default async function Admin() {
           <Stat label="Avg. output tokens" value={`${(avg((j) => j.outputTokens) / 1000).toFixed(0)}k`} />
           <Stat label="Avg. cache reads" value={`${(avg((j) => j.cacheReadTokens) / 1e6).toFixed(2)}M`} />
         </div>
+
+        <Card className="overflow-hidden">
+          <CardHeader
+            title="Launch funnel"
+            description={
+              <>
+                By week of sign-up, admins left out. Targets: 40% make a video within 24 hours, 5% buy a pack. Visits are in{" "}
+                <a href="https://dash.cloudflare.com/?to=/:account/web-analytics" target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                  Cloudflare Web Analytics
+                </a>
+                .
+              </>
+            }
+          />
+          <div className="overflow-x-auto">
+            <table className="w-full whitespace-nowrap text-sm">
+              <thead>
+                <tr className="border-b border-gray-alpha-400 bg-background-200 text-left text-xs text-gray-900">
+                  {["Week of", "Sign-ups", "Made a video", "Within 24 hours", "Bought a pack"].map((h) => (
+                    <th key={h} className="px-5 py-2.5 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-alpha-400 tabular-nums">
+                {funnel.map((w) => (
+                  <tr key={w.week.toISOString()}>
+                    <td className="px-5 py-2.5">{w.week.toLocaleDateString("en", { day: "numeric", month: "short", timeZone: "UTC" })}</td>
+                    <td className="px-5 py-2.5">{w.signups}</td>
+                    <td className="px-5 py-2.5">{share(w.madeVideo, w.signups)}</td>
+                    <td className="px-5 py-2.5">{share(w.within24h, w.signups)}</td>
+                    <td className="px-5 py-2.5">{share(w.bought, w.signups)}</td>
+                  </tr>
+                ))}
+                <tr className="bg-background-200 font-medium">
+                  <td className="px-5 py-2.5">6 weeks</td>
+                  <td className="px-5 py-2.5">{total.signups}</td>
+                  <td className="px-5 py-2.5">{share(total.madeVideo, total.signups)}</td>
+                  <td className="px-5 py-2.5">{share(total.within24h, total.signups)}</td>
+                  <td className="px-5 py-2.5">{share(total.bought, total.signups)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
         <Card className="overflow-hidden">
           <CardHeader title="Margin by credit pack at current cost" description={`One credit costs us $${costPerCredit.toFixed(2)} (30-day cost over credits used).`} />
