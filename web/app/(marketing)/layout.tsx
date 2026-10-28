@@ -10,16 +10,20 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
     // The marketing site is always dark: it matches the brand (neon lime on black). The dashboard follows the visitor's theme.
     <div className="dark min-h-dvh bg-background-100 text-gray-1000">
       <header className="sticky top-0 z-40 border-b border-gray-alpha-400 bg-background-100/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-8 px-4 md:px-8">
-          <Link href="/" aria-label={`${BRAND.name} home`} className="flex h-10 items-center">
+        {/* Logo left, links centred, account buttons right. */}
+        <div className="mx-auto grid h-16 max-w-[1200px] grid-cols-[1fr_auto_1fr] items-center gap-8 px-4 md:px-8">
+          <Link href="/" aria-label={`${BRAND.name} home`} className="flex h-10 items-center justify-self-start">
             <Logo />
           </Link>
           <nav className="hidden items-center gap-6 text-sm text-gray-900 md:flex">
+            <Link href="/#examples" className="hover:text-gray-1000">
+              Examples
+            </Link>
             <Link href="/#how" className="hover:text-gray-1000">
               How it works
             </Link>
-            <Link href="/templates" className="hover:text-gray-1000">
-              Templates
+            <Link href="/recipes" className="hover:text-gray-1000">
+              Recipes
             </Link>
             <Link href="/#pricing" className="hover:text-gray-1000">
               Pricing
@@ -28,7 +32,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
               FAQ
             </Link>
           </nav>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="col-start-3 flex items-center gap-2 justify-self-end">
             {isDemo ? (
               <ButtonLink href="/dashboard" variant="primary" size="sm">
                 Open dashboard

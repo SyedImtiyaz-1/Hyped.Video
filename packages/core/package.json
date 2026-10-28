@@ -27,6 +27,7 @@
     "./repo-token": "./src/repo-token.ts",
     "./voices": "./src/voices.ts",
     "./templates": "./src/templates.ts",
+    "./recipes": "./src/recipes.ts",
     "./reel": "./src/reel.ts",
     "./captions": "./src/captions.ts",
     "./words": "./src/words.ts",

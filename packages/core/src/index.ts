@@ -5,6 +5,7 @@ export type * from "./contract";
 export { MUSIC_CHOICES, QUALITIES, VIDEO_TYPES } from "./contract";
 export * from "./voices";
 export * from "./templates";
+export * from "./recipes";
 export * from "./engines";
 export * from "@prisma/client";
 export * from "./repo-token";

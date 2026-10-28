@@ -309,6 +309,24 @@
   --shadow-menu: 0 0 0 1px var(--ds-gray-alpha-400), 0 4px 8px -4px rgba(0, 0, 0, 0.04), 0 16px 24px -8px rgba(0, 0, 0, 0.06);
   --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
   @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  /* Marketing: the examples strip scrolls one copy of itself, then loops (showcase-marquee.tsx). */
+  --animate-marquee: marquee 70s linear infinite;
+  @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  /* Marketing: the hero's glow drifts slowly. */
+  --animate-aurora: aurora 16s ease-in-out infinite alternate;
+  @keyframes aurora { from { transform: translate3d(-10%, 0, 0) scale(1); } to { transform: translate3d(10%, 8%, 0) scale(1.2); } }
+  /* Marketing: voiceover bars (feature-bento.tsx). */
+  --animate-wave: wave 1.2s ease-in-out infinite;
+  @keyframes wave { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+  /* Marketing: one caption word lights up at a time, each word delayed by a quarter of the cycle (feature-bento.tsx). */
+  --animate-caption-word: caption-word 3.2s infinite;
+  @keyframes caption-word { 0%, 24% { color: var(--ds-brand); transform: scale(1.12); } 25%, 100% { color: #fff; transform: scale(1); } }
+  /* Marketing: the hero's sample tiles bob gently, each tilted its own way via --tilt (floating-samples.tsx). */
+  --animate-float: float 7s ease-in-out infinite;
+  @keyframes float { 0%, 100% { transform: translateY(0) rotate(var(--tilt, 0deg)); } 50% { transform: translateY(-12px) rotate(var(--tilt, 0deg)); } }
+  /* Marketing: each new word of the hero's headline rises into place (hero-prompt.tsx). */
+  --animate-word-in: word-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  @keyframes word-in { from { opacity: 0; transform: translateY(0.35em); filter: blur(6px); } to { opacity: 1; transform: translateY(0); filter: blur(0); } }
 }
 
 @layer base {
