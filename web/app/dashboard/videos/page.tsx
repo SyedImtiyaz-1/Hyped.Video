@@ -1,6 +1,6 @@
 import { Clapperboard, Plus, Search } from "lucide-react";
 import { AutoRefresh } from "@/components/video/auto-refresh";
-import { VideoList } from "@/components/video/video-row";
+import { ProjectGrid } from "@/components/video/project-grid";
 import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -11,6 +11,7 @@ import { listVideos, parseStatus, type StatusFilter } from "@/lib/data";
 import { requireUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Projects" };
 
 const FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -38,8 +39,8 @@ export default async function VideosPage({ searchParams }: { searchParams: Promi
     <>
       <AutoRefresh active={jobs.some((j) => j.status === "QUEUED" || j.status === "RUNNING")} />
       <PageHeader
-        title="Videos"
-        description="Every video and revision you've made, newest first."
+        title="Projects"
+        description="Every video, reel and revision you've made, newest first."
         actions={
           <ButtonLink href="/dashboard/new" variant="primary">
             <Plus />
@@ -51,19 +52,19 @@ export default async function VideosPage({ searchParams }: { searchParams: Promi
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <form action="/dashboard/videos" className="w-full lg:max-w-sm">
             {status !== "all" && <input type="hidden" name="status" value={status} />}
-            <Input key={q} name="q" defaultValue={q} placeholder="Search by site, repo or notes…" prefix={<Search />} aria-label="Search videos" />
+            <Input key={q} name="q" defaultValue={q} placeholder="Search by site, repo, clip or notes…" prefix={<Search />} aria-label="Search projects" />
           </form>
           <div className="overflow-x-auto">
             <SegmentedLinks active={status} items={FILTERS.map((f) => ({ ...f, href: href(f.key) }))} />
           </div>
         </div>
         {jobs.length ? (
-          <VideoList jobs={jobs} />
+          <ProjectGrid jobs={jobs} newHref={q || status !== "all" ? undefined : "/dashboard/new"} />
         ) : (
           <Card>
             <EmptyState
               icon={<Clapperboard />}
-              title={q || status !== "all" ? "No videos match" : "No videos yet"}
+              title={q || status !== "all" ? "Nothing matches" : "No projects yet"}
               description={q || status !== "all" ? "Try a different search or filter." : "Paste a website or repo and we'll make your first launch video."}
               action={
                 <ButtonLink href="/dashboard/new" variant="primary">

@@ -27,11 +27,23 @@ then `docs/STRATEGY.md`, `docs/PLAN.md`, `docs/UNIT_ECONOMICS.md`.
 - Syed's roadmap (26 Oct 2026): ship the product video editor → Recipes gallery + several uploads per video → Premium
   (4K, 60 fps, MOV) → pro editor tools (layouts, titles, looks, sound library) → "make it like this" + one prompt box.
 - Direction (Taibanaz, 27 Oct): build Hyped to Cardboard's level, landing page included, and everything in Syed's plan.
-- Work in progress on `launch/landing-refresh` (uncommitted, 27 Oct): a Cardboard-style landing page (full-screen hero
+- Open for review (draft, base `launch/caption-styles`): PR #6 `launch/landing-refresh` (below) and PR #7
+  `fix/media-r2-errors` (serveFile logs R2's error and returns 503 instead of Cloudflare 1101). Stacked on PR #6 (base
+  `launch/landing-refresh`): `launch/dashboard-templates` (below).
+- PR #6, `launch/landing-refresh` (27 Oct): a Cardboard-style landing page (full-screen hero
   with a prompt box: link + words + recipe menu + clip upload, "Auto" picks a recipe in `web/lib/prompt.ts`; floating
   sample tiles; a timeline ruler; the recipes gallery right below; then the examples strip, feature bento, pricing) and Recipes M1 (`packages/core/src/recipes.ts`, `/recipes`,
   `/recipes/[id]`, `/dashboard/recipes`, the one-screen panel at `/dashboard/recipes/[id]`, 308s from the template pages).
   Type-checks pass and the pages load in demo mode; a real Remix still needs testing with the full stack.
+- `launch/dashboard-templates` (28 Oct, draft PR on PR #6): a Cardboard-style dashboard. The home greets by first
+  name over the shared prompt box (`web/components/create/prompt-box.tsx`), then one card: Templates ("Remix a video"
+  strip, then "Pick a template to remix" with search, Short/Long-form, sizes, types, a row per category) and Your
+  projects (a grid), then this month's numbers. Decisions (Taibanaz, 28 Oct): the dashboard UI says "Templates", not
+  "Recipes" (text only: URLs, code and the public site still say recipes); the sidebar is Home, Projects (videos and
+  reels in one grid at `/dashboard/videos`), Templates, with credits, Usage, Settings and help at its foot; the
+  dashboard is dark until the customer picks a theme; a template opens in a modal over the page
+  (`web/components/recipes/recipe-modal.tsx`, `?recipe=` in the address), and its page stays for links; the strip's
+  first tile is "Upload a clip" (to the reel form) until "make it like this" exists.
 
 ## Local development
 - macOS: `npm run dev:all` (database, render Worker on 8787, site on 3001). See `LOCAL_TESTING.md`.
