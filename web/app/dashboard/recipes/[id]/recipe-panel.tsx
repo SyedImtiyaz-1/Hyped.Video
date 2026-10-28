@@ -1,27 +1,24 @@
 "use client";
 import { ArrowRight, ChevronDown, GitBranch, Globe, LoaderCircle } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
-import type { MusicChoice, Quality } from "@launchreel/core/contract";
 import { creditsFor } from "@launchreel/core/pricing";
 import { RECIPE_CATEGORIES, type Recipe } from "@launchreel/core/recipes";
-import { VOICES, type VoiceId } from "@launchreel/core/voices";
-import { FORMATS, LENGTHS, MUSIC_OPTIONS, QUALITY_OPTIONS, TONES } from "@/app/dashboard/new/new-video-form";
+import { VOICES } from "@launchreel/core/voices";
+import { FORMATS, MUSIC_OPTIONS, QUALITY_OPTIONS, TONES } from "@/app/dashboard/new/new-video-form";
 import { TIER_LABEL } from "@/components/recipes/labels";
 import { RecipeSample, RecipeStory } from "@/components/recipes/recipe-sample";
+import { useRemix, type RemixStory } from "@/components/recipes/use-remix";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import { plural } from "@/lib/format";
 import { normalizeSourceUrl } from "@/lib/source-url";
 
-type Story = NonNullable<Recipe["video"]>;
-
 /**
  * A recipe on one screen (docs/RECIPES.md): the sample and its story on the left; on the right the product to make it
- * for, "Anything to change?", shape and length, more options, the cost and Remix. It posts to /api/jobs exactly as the
- * step-by-step form does, with the recipe's choices filled in. Private repos need a token, which only that form saves.
+ * for, "Anything to change?", shape and length, more options, the cost and Remix. The dashboard opens recipes in a
+ * modal (recipe-modal.tsx); this page is for links, and for every option.
  */
 export function RecipePanel({
   recipe: r,
@@ -32,69 +29,16 @@ export function RecipePanel({
   studioAvailable,
 }: {
   recipe: Recipe;
-  story: Story;
+  story: RemixStory;
   credits: number;
   initialUrl: string;
   initialNotes: string;
   studioAvailable: boolean;
 }) {
-  const router = useRouter();
-  const [url, setUrl] = useState(initialUrl);
-  const [notes, setNotes] = useState(initialNotes);
-  const [format, setFormat] = useState(r.format);
-  const [duration, setDuration] = useState(r.durationSec);
-  const [quality, setQuality] = useState<Quality>(r.tier === "studio" && studioAvailable ? "studio" : "standard");
-  const [voice, setVoice] = useState<VoiceId | null>(story.voice);
-  const [music, setMusic] = useState<MusicChoice>(story.music);
-  const [tone, setTone] = useState(story.tone);
-  const [captions, setCaptions] = useState(true);
-  const [owner, setOwner] = useState(false);
   const [more, setMore] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; upgrade?: boolean; token?: boolean } | null>(null);
-
+  const { url, setUrl, notes, setNotes, format, setFormat, duration, setDuration, quality, setQuality, voice, setVoice, music, setMusic, tone, setTone, captions, setCaptions, owner, setOwner, busy, error, setError, lengths, cost, short, fullForm, remix } =
+    useRemix({ recipe: r, story, credits, studioAvailable, initial: { url: initialUrl, notes: initialNotes } });
   const github = /github\.com\//i.test(url);
-  const lengths = [...new Set([...LENGTHS, r.durationSec])].filter((s) => s >= r.durations[0] && s <= r.durations[1]).sort((a, b) => a - b);
-  const cost = creditsFor("newVideo", duration, quality);
-  const short = cost > credits;
-  const fullForm = (sourceUrl = url) => `/dashboard/new?${new URLSearchParams({ template: r.id, ...(sourceUrl.trim() ? { url: sourceUrl.trim() } : {}) })}`;
-
-  async function remix(e: React.FormEvent) {
-    e.preventDefault();
-    const sourceUrl = normalizeSourceUrl(url);
-    if (!sourceUrl) return setError({ message: "Enter your website or a GitHub repo, like myapp.com or github.com/you/app." });
-    if (!owner) return setError({ message: "Confirm that you own this product or may promote it." });
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sourceUrl,
-          tone: tone || undefined,
-          format,
-          durationSec: duration,
-          notes: notes.trim() || undefined,
-          videoType: story.videoType,
-          music,
-          quality,
-          voice,
-          captions,
-          template: r.id,
-          ownershipConfirmed: true,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      // A repo GitHub doesn't show publicly needs a token, which the step-by-step form encrypts and saves.
-      if (!res.ok) return setError({ message: data.error ?? "Could not start the video", upgrade: data.upgrade, token: res.status === 422 && /github\.com\//i.test(sourceUrl) });
-      router.push(`/dashboard/videos/${data.id}`);
-    } catch {
-      setError({ message: "Network error. Try again." });
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <form onSubmit={remix} className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-start">
