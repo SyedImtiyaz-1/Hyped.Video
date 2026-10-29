@@ -2,6 +2,7 @@ import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton } from "@cl
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ButtonLink, buttonClasses } from "@/components/ui/button";
+import { LinkPending } from "@/components/ui/link-pending";
 import { BRAND, BUSINESS } from "@/lib/brand";
 import { isDemo } from "@/lib/demo";
 
@@ -36,6 +37,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             {isDemo ? (
               <ButtonLink href="/dashboard" variant="primary" size="sm">
                 Open dashboard
+                <LinkPending />
               </ButtonLink>
             ) : (
               <>
@@ -50,6 +52,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
                 <SignedIn>
                   <ButtonLink href="/dashboard" size="sm">
                     Dashboard
+                    <LinkPending />
                   </ButtonLink>
                   <UserButton />
                 </SignedIn>
