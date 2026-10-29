@@ -268,12 +268,13 @@ function RemixForm({ recipe: r, story, credits, studioAvailable, initial }: { re
           options={QUALITY_OPTIONS.map((q) => ({ value: q.value, label: q.value === "studio" && !studioAvailable ? `${q.label} · Soon` : q.label, disabled: q.value === "studio" && !studioAvailable }))}
         />
         <span className="flex-1" />
+        {/* On phones the choices fill the first line, so the main action gets a line of its own, full width. */}
         {short ? (
-          <ButtonLink href="/dashboard/billing" variant="primary">
+          <ButtonLink href="/dashboard/billing" variant="primary" className="max-sm:w-full">
             Buy credits
           </ButtonLink>
         ) : (
-          <Button type="submit" variant="primary" disabled={busy}>
+          <Button type="submit" variant="primary" disabled={busy} className="max-sm:w-full">
             {busy ? <LoaderCircle className="animate-spin" /> : null}
             Remix <ArrowUp />
           </Button>
