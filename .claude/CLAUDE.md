@@ -27,15 +27,17 @@ then `docs/STRATEGY.md`, `docs/PLAN.md`, `docs/UNIT_ECONOMICS.md`.
 - Syed's roadmap (26 Oct 2026): ship the product video editor → Recipes gallery + several uploads per video → Premium
   (4K, 60 fps, MOV) → pro editor tools (layouts, titles, looks, sound library) → "make it like this" + one prompt box.
 - Direction (Taibanaz, 27 Oct): build Hyped to Cardboard's level, landing page included, and everything in Syed's plan.
-- Merged into `launch/caption-styles` (28 Oct): PR #6 `launch/landing-refresh` (below) and PR #7 `fix/media-r2-errors`
-  (serveFile logs R2's error and returns 503 instead of Cloudflare 1101). Open for review (draft, base
-  `launch/caption-styles`): `launch/dashboard-templates` (below).
+- Merged into `launch/caption-styles` (27–28 Oct): PR #6 `launch/landing-refresh` (below), PR #7 `fix/media-r2-errors`
+  (serveFile logs R2's error and returns 503 instead of Cloudflare 1101) and PR #9 `launch/dashboard-templates` (below).
+  Then PR #10 merged `launch/caption-styles` into `main` (28 Oct): `main` has everything as of that day. New PRs still
+  go to `launch/caption-styles` (Taibanaz, 29 Oct). Open for review: `fix/open-dashboard-link` (a spinner on the
+  landing page's dashboard buttons while the dashboard loads; Turbopack for demo mode).
 - PR #6, `launch/landing-refresh` (27 Oct): a Cardboard-style landing page (full-screen hero
   with a prompt box: link + words + recipe menu + clip upload, "Auto" picks a recipe in `web/lib/prompt.ts`; floating
   sample tiles; a timeline ruler; the recipes gallery right below; then the examples strip, feature bento, pricing) and Recipes M1 (`packages/core/src/recipes.ts`, `/recipes`,
   `/recipes/[id]`, `/dashboard/recipes`, the one-screen panel at `/dashboard/recipes/[id]`, 308s from the template pages).
   Type-checks pass and the pages load in demo mode; a real Remix still needs testing with the full stack.
-- `launch/dashboard-templates` (28 Oct, draft PR): a Cardboard-style dashboard. The home greets by first
+- PR #9, `launch/dashboard-templates` (28 Oct): a Cardboard-style dashboard. The home greets by first
   name over the shared prompt box (`web/components/create/prompt-box.tsx`), then one card: Templates ("Remix a video"
   strip, then "Pick a template to remix" with search, Short/Long-form, sizes, types, a row per category) and Your
   projects (a grid), then this month's numbers. Decisions (Taibanaz, 28 Oct): the dashboard UI says "Templates", not
@@ -48,7 +50,9 @@ then `docs/STRATEGY.md`, `docs/PLAN.md`, `docs/UNIT_ECONOMICS.md`.
 ## Local development
 - macOS: `npm run dev:all` (database, render Worker on 8787, site on 3001). See `LOCAL_TESTING.md`.
 - Windows: Wrangler can't run containers on Windows, so the full stack runs from a clone inside WSL (Ubuntu). For UI
-  work, demo mode runs on Windows directly: in `web/`, `$env:DEMO_MODE="true"; npx next dev -p 3100` (PowerShell).
+  work, demo mode runs on Windows directly: in `web/`, `$env:DEMO_MODE="true"; npx next dev -p 3100 --turbopack`
+  (PowerShell). Without `--turbopack` (webpack), each page takes minutes to compile on a PC with 8 GB of RAM, and links
+  seem dead while it does.
   `npm run demo` and the macOS key dialogs (`npm run openai-key` and others) don't work on Windows; edit `.env` by hand.
 
 ## Keep this file current
