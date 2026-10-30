@@ -46,6 +46,39 @@ then `docs/STRATEGY.md`, `docs/PLAN.md`, `docs/UNIT_ECONOMICS.md`.
   dashboard is dark until the customer picks a theme; a template opens in a modal over the page
   (`web/components/recipes/recipe-modal.tsx`, `?recipe=` in the address), and its page stays for links; the strip's
   first tile is "Upload a clip" (to the reel form) until "make it like this" exists.
+- Reel templates (29 Oct, not committed yet): the six reel edit styles are templates in the dashboard (`REEL_RECIPES`,
+  ids `reel-<style>`, in `packages/core/src/recipes.ts`), not on the public site. Decisions (Taibanaz, 29 Oct): they sit
+  in the categories with the videos, as on Cardboard (Talking-head, Vlog, Clipping), and their popup starts the reel
+  itself: the clip, "Anything to change?" (saved as `Job.notes`, then waiting in the editor's Ask AI) and Remix.
+  The upload logic is shared with the reel form (`web/components/reels/use-reel-upload.ts`). Tiles carry no text
+  (no "Reel" badge or feature chips; the name on hover); real sample reels per style are still to make (they need our
+  own clips and Syed's full stack; one `SHOWCASE` line each, with `template: "reel-<style>"`).
+- Landing and dashboard, told apart as Cardboard's are (Taibanaz, 29 Oct, not committed yet): the dashboard is a clean
+  workspace (prompt box, category chips that open their templates, then Templates | Your projects; the "Remix a
+  video" strip plays by itself), with no greeting or floating videos. The landing page follows Cardboard's flow in our
+  own words: hero (a serif headline that cycles "Make a launch video / from your website" and so on, prompt box,
+  floating samples), Made with Hyped (masonry), Three steps (paste, direct, share), Everything a video needs (01 story,
+  02 edit, 03 publish), use-case tabs, pricing, FAQ. What we don't have yet (videos from words alone, a Mac app,
+  Claude/ChatGPT plugins) stays off it.
+- Editor first (Taibanaz, 29 Oct; roadmap Decision 2), in two parts. Part A (not committed yet): the dashboard's prompt
+  box starts at once and opens the editor (`/dashboard/videos/[id]/edit`) on its first cut, as Cardboard's does (a link
+  starts the video with Auto's recipe, a clip uploads and starts a reel; the line under the box says Enter spends credits
+  and confirms ownership); template Remix opens the editor too. The editor has Cardboard's layout (tools rail and panel,
+  preview, Ask AI always open, timeline; "Filters" is "Looks") and an export dialog (1080p, 30 fps, MP4 and the
+  watermark as they are; 4K, 60 fps, MOV and WebM shown locked). Product videos open in the same frame with Ask AI
+  sending revisions, until Syed's product video editor lands. Part B, with Syed (render pipeline, full stack): layout
+  presets (several clips: edit model v2), about 20 looks, the Director as an agent that asks for what's missing, 4K/60 fps.
+- The real-time editor, step E1 (Taibanaz, 30 Oct; not committed yet): an interactive timeline on today's edit model,
+  no render change (`web/components/reels/reel-timeline.tsx`): drag B-roll, effects, sounds and cuts, drag their edges to
+  resize, drag across the Video track to cut a stretch out, Delete removes the picked piece, Space plays, the arrows step;
+  a drag is one undo step and snaps to the playhead. E2–E6 (several clips, layouts, looks and titles, the Director agent,
+  4K) need Syed; a spec for him (`docs/EDITOR.md`) waits until E1 has been tried. The customer's own clip opens in the
+  editor at once, from their computer (`/dashboard/edit/local`, the editor's `local` mode, a blank edit): in demo mode
+  the prompt box hands clips there in memory; its captions follow in seconds (Taibanaz, 30 Oct): the browser sends the
+  sound as 16 kHz WAV to `/api/local/transcribe` (local development only, whisper-1 with the root .env's OpenAI key,
+  as the pipeline does). Ask AI, B-roll search and Export need the clip uploaded. The editor's
+  preview now has the reel's own shape (the render keeps the clip's), not always 9:16. Next: the same instant open on a
+  real account, while the upload and the first cut run, then merging the two.
 
 ## Local development
 - macOS: `npm run dev:all` (database, render Worker on 8787, site on 3001). See `LOCAL_TESTING.md`.

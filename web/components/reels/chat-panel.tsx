@@ -9,10 +9,11 @@ const SUGGESTIONS = ["Yellow captions with a pink highlight", "Two words at a ti
 
 /**
  * Editing by typing: what the customer asks, and what the assistant changed. Each answer's changes are one step the
- * editor can undo; nothing is saved until export.
+ * editor can undo; nothing is saved until export. `draft`: a request typed in beforehand, waiting to be sent. `fill`:
+ * as tall as its column (the editor's side column on wide screens), the messages taking the room.
  */
-export function ChatPanel({ messages, busy, onSend, onUndo }: { messages: ChatMessage[]; busy: boolean; onSend: (text: string) => void; onUndo: () => void }) {
-  const [text, setText] = useState("");
+export function ChatPanel({ messages, busy, onSend, onUndo, draft, fill }: { messages: ChatMessage[]; busy: boolean; onSend: (text: string) => void; onUndo: () => void; draft?: string; fill?: boolean }) {
+  const [text, setText] = useState(draft ?? "");
   const list = useRef<HTMLDivElement>(null);
   // Newest at the bottom, in view (scrollTo returns a promise in newer browsers: an effect must return nothing).
   useEffect(() => {
@@ -26,8 +27,8 @@ export function ChatPanel({ messages, busy, onSend, onUndo }: { messages: ChatMe
   };
   const lastChange = messages.map((m) => m.from === "ai" && (m.changes ?? 0) > 0).lastIndexOf(true);
   return (
-    <div className="flex flex-col gap-3">
-      <div ref={list} className="max-h-[420px] min-h-[140px] space-y-2 overflow-y-auto rounded-lg border border-gray-alpha-400 p-3" aria-live="polite">
+    <div className={cn("flex flex-col gap-3", fill && "h-full")}>
+      <div ref={list} className={cn("min-h-[140px] space-y-2 overflow-y-auto rounded-lg border border-gray-alpha-400 p-3", fill ? "max-h-[420px] flex-1 lg:max-h-none" : "max-h-[420px]")} aria-live="polite">
         {messages.length === 0 ? (
           <div>
             <p className="flex items-center gap-1.5 text-sm font-medium text-gray-1000">

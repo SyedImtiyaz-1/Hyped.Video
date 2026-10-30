@@ -18,7 +18,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       demo={isDemo}
       userSlot={isDemo ? <Avatar seed={user.email ?? user.id} size={28} /> : <UserButton />}
     >
-      <RecipeModalProvider credits={user.credits} studioAvailable={studio}>
+      <RecipeModalProvider credits={user.credits} reelCredits={user.reelCredits} studioAvailable={studio}>
         {children}
       </RecipeModalProvider>
     </AppShell>

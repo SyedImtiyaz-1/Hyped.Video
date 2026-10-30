@@ -57,9 +57,10 @@ export function StyleFrame({ style, changes, fonts = ["classic"], tick, classNam
 export function StylePicker({ value, onChange, changes }: { value: ReelStyle; onChange: (style: ReelStyle) => void; changes?: ReelLookChanges }) {
   const tick = useTick();
   return (
-    <div>
-      {/* A row to swipe through on phones, a grid from tablets up. */}
-      <div className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 sm:mx-0 sm:grid sm:grid-cols-4 sm:gap-3 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-6" role="radiogroup" aria-label="Caption style">
+    <div className="@container">
+      {/* A row to swipe through on phones, a grid from tablets up, as many columns as its own width takes (the reel
+          form is wide; the editor's tools panel is narrow). */}
+      <div className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 sm:mx-0 sm:grid sm:grid-cols-3 sm:gap-3 sm:overflow-visible sm:px-0 sm:pb-0 @md:grid-cols-4 @2xl:grid-cols-6" role="radiogroup" aria-label="Caption style">
         {REEL_STYLES.map((style) => {
           const selected = value === style;
           return (

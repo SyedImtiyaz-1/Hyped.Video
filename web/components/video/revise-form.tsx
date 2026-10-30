@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { plural } from "@/lib/format";
 
-export function ReviseForm({ jobId, credits, cost }: { jobId: string; credits: number; cost: number }) {
+/** A change asked for in plain English: a revision of the video, for its credits. `editor`: from the editor, which the revision opens in too. */
+export function ReviseForm({ jobId, credits, cost, editor }: { jobId: string; credits: number; cost: number; editor?: boolean }) {
   const router = useRouter();
   const [change, setChange] = useState("");
   const [busy, setBusy] = useState(false);
@@ -22,7 +23,7 @@ export function ReviseForm({ jobId, credits, cost }: { jobId: string; credits: n
       const res = await fetch(`/api/jobs/${jobId}/revise`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ change }) });
       const data = await res.json();
       if (!res.ok) return setError({ message: data.error ?? "Could not start the revision", upgrade: data.upgrade });
-      router.push(`/dashboard/videos/${data.id}`);
+      router.push(`/dashboard/videos/${data.id}${editor ? "/edit" : ""}`);
     } catch {
       setError({ message: "Network error. Try again." });
     } finally {

@@ -1,14 +1,15 @@
 "use client";
 import { ChevronDown, Ratio, Search } from "lucide-react";
-import { useState } from "react";
-import { RECIPES, usedRecipeCategories, type Recipe, type RecipeCategory } from "@launchreel/core/recipes";
+import { useEffect, useRef, useState } from "react";
+import { ALL_RECIPES, usedRecipeCategories, type Recipe, type RecipeCategory } from "@launchreel/core/recipes";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
+import { useGalleryFilter } from "./gallery-filter";
 import { RATIO } from "./labels";
 import { RecipeTile, categoryLabel } from "./recipe-tile";
 import { ScrollRow } from "./scroll-row";
 
-const CATEGORIES = usedRecipeCategories();
+const CATEGORIES = usedRecipeCategories(ALL_RECIPES);
 
 // Short-form is what a feed plays through: up to 30 seconds.
 const SHORT_MAX = 30;
@@ -26,17 +27,28 @@ const SIZES: { value: Recipe["format"]; label: string }[] = [
 ];
 
 /**
- * Every recipe, a row per category, with a search and filters for length, size and type. Filtered, it's one wrapping
- * set of tiles. A size carries into the recipe it opens; so does a link the customer typed before (`url`).
+ * Every recipe (the reel styles too), a row per category, with a search and filters for length, size and type.
+ * Filtered, it's one wrapping set of tiles. A size carries into the recipe it opens; so does a link the customer typed
+ * before (`url`). On the home page its type is the chips' (gallery-filter.tsx), and picking one scrolls here.
  */
 export function RecipeBrowser({ title = "Pick a template to remix", url }: { title?: string; url?: string }) {
+  const filter = useGalleryFilter();
+  const section = useRef<HTMLElement>(null);
   const [query, setQuery] = useState("");
   const [length, setLength] = useState<Length>("all");
   const [size, setSize] = useState<Recipe["format"] | "all">("all");
-  const [type, setType] = useState<RecipeCategory | "all">("all");
+  const [ownType, setOwnType] = useState<RecipeCategory | "all">("all");
+  const type = filter?.type ?? ownType;
+  const setType = filter?.setType ?? setOwnType;
+  useEffect(() => {
+    if (!filter?.jump) return;
+    // Two frames on: the home's tabs show this panel in their own effect, which runs after this one.
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => section.current?.scrollIntoView({ behavior: "smooth", block: "start" })));
+    return () => cancelAnimationFrame(frame);
+  }, [filter?.jump]);
   const q = query.trim().toLowerCase();
   const filtered = Boolean(q) || length !== "all" || size !== "all" || type !== "all";
-  const shown = RECIPES.filter(
+  const shown = ALL_RECIPES.filter(
     (r) =>
       (!q || [r.name, r.pitch, categoryLabel(r.category), ...r.platforms].some((s) => s.toLowerCase().includes(q))) &&
       (length === "all" || (length === "short") === r.durationSec <= SHORT_MAX) &&
@@ -47,7 +59,7 @@ export function RecipeBrowser({ title = "Pick a template to remix", url }: { tit
   const clear = () => (setQuery(""), setLength("all"), setSize("all"), setType("all"));
 
   return (
-    <section aria-label={title} className="space-y-6">
+    <section ref={section} aria-label={title} className="scroll-mt-20 space-y-6">
       <div className="space-y-4">
         <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -80,7 +92,7 @@ export function RecipeBrowser({ title = "Pick a template to remix", url }: { tit
         <div className="space-y-6">
           {CATEGORIES.map((c) => (
             <ScrollRow key={c.value} title={c.label} className="h-[180px] md:h-[200px]">
-              {RECIPES.filter((r) => r.category === c.value).map((r) => (
+              {ALL_RECIPES.filter((r) => r.category === c.value).map((r) => (
                 <RecipeTile key={r.id} recipe={r} open={open} />
               ))}
             </ScrollRow>
@@ -89,7 +101,7 @@ export function RecipeBrowser({ title = "Pick a template to remix", url }: { tit
       ) : shown.length ? (
         <div>
           <p className="mb-3 text-[13px] text-gray-900">
-            {shown.length} of {RECIPES.length} templates ·{" "}
+            {shown.length} of {ALL_RECIPES.length} templates ·{" "}
             <button type="button" onClick={clear} className="underline underline-offset-2 hover:text-gray-1000">
               Clear filters
             </button>

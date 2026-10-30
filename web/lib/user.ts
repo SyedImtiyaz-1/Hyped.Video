@@ -27,13 +27,6 @@ export const requireUser = cache(async () => {
   });
 });
 
-/** The signed-in person's first name from Clerk, for greetings; null in demo mode or when they haven't given one. */
-export const firstName = cache(async (): Promise<string | null> => {
-  if (isDemo) return null;
-  const cu = await currentUser().catch(() => null);
-  return cu?.firstName?.trim() || null;
-});
-
 /** The admins' user ids (ADMIN_USER_IDS, comma-separated). */
 export const adminIds = () =>
   (process.env.ADMIN_USER_IDS ?? "")

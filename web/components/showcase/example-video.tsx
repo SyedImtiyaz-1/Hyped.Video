@@ -20,9 +20,10 @@ const WATCH: Record<ShowcaseVideo["format"], string> = {
 
 /**
  * A finished video: its poster, a silent preview while the mouse is over it, and the whole video with sound in a
- * dialog on click or tap. Nothing but the poster loads until someone asks for the video.
+ * dialog on click or tap. Nothing but the poster loads until someone asks for the video. `className` resizes the tile
+ * (a gallery column gives it its width, where a card's stage gives it its height).
  */
-export function ExampleVideo({ video, label }: { video: ShowcaseVideo; label: string }) {
+export function ExampleVideo({ video, label, className }: { video: ShowcaseVideo; label: string; className?: string }) {
   const [preview, setPreview] = useState(false);
   const [shown, setShown] = useState(false); // the preview is playing, so it can fade in over the poster
   const dialog = useRef<HTMLDialogElement>(null);
@@ -66,7 +67,7 @@ export function ExampleVideo({ video, label }: { video: ShowcaseVideo; label: st
         onPointerEnter={(e) => e.pointerType === "mouse" && setPreview(true)}
         onPointerLeave={stopPreview}
         aria-label={`Watch ${label}`}
-        className={cn("relative overflow-hidden rounded-lg border border-gray-alpha-400 bg-black", SHAPE[video.format])}
+        className={cn("relative overflow-hidden rounded-lg border border-gray-alpha-400 bg-black", SHAPE[video.format], className)}
       >
         {/* A poster that can't load is hidden rather than shown as a broken image; the tile stays, black, with its play button. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}

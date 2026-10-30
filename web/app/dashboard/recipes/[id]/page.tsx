@@ -14,8 +14,8 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function RecipePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ url?: string; notes?: string }> }) {
   const recipe = recipeById((await params).id);
   if (!recipe || recipe.status !== "live") notFound();
-  // Reel recipes start from a clip in the reel form; every live recipe today is a product video.
-  if (!recipe.video) redirect("/dashboard/reels");
+  // Reel recipes start from a clip in the reel form, in their edit style (the dashboard opens them in its modal).
+  if (!recipe.video) redirect(recipe.reel ? `/dashboard/reels?style=${recipe.reel.editStyle}` : "/dashboard/reels");
   // The homepage's prompt box sends the words it was given as notes (lib/prompt.ts).
   const [user, studio, { url, notes }] = await Promise.all([requireUser(), studioAvailable(), searchParams]);
   return (

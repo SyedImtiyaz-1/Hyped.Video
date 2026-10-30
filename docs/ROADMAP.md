@@ -163,6 +163,10 @@ Syed's plan. Done so far:
 - **Decision 4 taken:** the prompt box ships now. The homepage hero is a Cardboard-style prompt box: link + words +
   recipe menu + clip upload, with "Auto" picking a recipe from keywords (`web/lib/prompt.ts`). A model call can replace it later.
 - **Decision 10 changed:** the landing refresh grew into this Cardboard-style hero. It goes out with Recipes M1.
+- **Decision 2 taken (29 October): the editor first**, against the recommendation. Part A, the web side: the dashboard's
+  prompt box starts the video at once and opens the editor on its first cut; the editor gets Cardboard's layout
+  (tools, preview, Ask AI always open, timeline) and an export dialog. Part B, with Syed on the render side: Phase 2's
+  layouts (edit model v2), more looks and the Director agent; 4K and 60 fps stay in Phase 3. Recipes' M2 and M3 follow.
 
 The others are still open; recommendation first in each.
 

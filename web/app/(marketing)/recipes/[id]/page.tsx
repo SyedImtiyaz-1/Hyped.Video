@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { creditsFor, TRIAL_CREDITS } from "@launchreel/core/pricing";
-import { RECIPE_CATEGORIES, RECIPES, recipeById } from "@launchreel/core/recipes";
+import { RECIPE_CATEGORIES, RECIPES, type Recipe } from "@launchreel/core/recipes";
 import { voiceById } from "@launchreel/core/voices";
 import { RATIO, TIER_LABEL } from "@/components/recipes/labels";
 import { RecipeSample, RecipeStory } from "@/components/recipes/recipe-sample";
@@ -12,16 +12,19 @@ import { plural } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
 
+// The public pages cover RECIPES only: the dashboard's reel styles (REEL_RECIPES) have none.
+const publicRecipe = (id: string): Recipe | null => RECIPES.find((x) => x.id === id) ?? null;
+
 export const generateStaticParams = () => RECIPES.map((r) => ({ id: r.id }));
 
 export async function generateMetadata({ params }: Props) {
-  const r = recipeById((await params).id);
+  const r = publicRecipe((await params).id);
   return r ? { title: `${r.name}: a video recipe`, description: `${r.pitch}. Made from your real product by ${BRAND.name}.` } : {};
 }
 
 /** A recipe's public page: its sample, its story and the way to make your own (sign-up first, then the recipe's panel). */
 export default async function PublicRecipePage({ params }: Props) {
-  const r = recipeById((await params).id);
+  const r = publicRecipe((await params).id);
   if (!r) notFound();
   const voice = voiceById(r.video?.voice);
   return (

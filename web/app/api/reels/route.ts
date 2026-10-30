@@ -39,6 +39,8 @@ const Body = z.object({
   // The edit style the reel starts from (its grade, music and cut effects), and how much happens.
   editStyle: z.enum(REEL_EDIT_STYLES as [ReelEditStyle, ...ReelEditStyle[]]).default("creator"),
   strength: z.enum(REEL_STRENGTHS as [ReelStrength, ...ReelStrength[]]).default("medium"),
+  // "Anything to change?" from a reel template: kept on the job, and waiting in the editor's Ask AI once the reel is made.
+  notes: z.string().trim().max(1000).optional(),
   // Dodo Payments' policy for AI content tools, and the people in the video: the customer confirms they may use it.
   ownershipConfirmed: z.literal(true),
 });
@@ -106,6 +108,7 @@ export async function POST(req: Request) {
       watermark: paid === 0, // free trial: this account has never bought a pack
       paidWith,
       music: "none",
+      notes: body.notes || null,
       reel,
       status: "QUEUED",
     },

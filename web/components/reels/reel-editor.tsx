@@ -1,5 +1,5 @@
 "use client";
-import { ArrowLeft, Check, LoaderCircle, Pause, Play, Redo2, Undo2 } from "lucide-react";
+import { ArrowLeft, AudioLines, Captions, Check, FileText, Film, LoaderCircle, Palette, Pause, Play, Redo2, Scissors, Smile, Sparkles, Undo2, Wand2, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { captionLines, cueOf, lineOfWord, resolveLook, type ReelLookChanges, type ReelStyle } from "@launchreel/core/captions";
@@ -21,12 +21,13 @@ import { ChatPanel, type ChatMessage } from "./chat-panel";
 import { CutsPanel, type TrimActions } from "./cuts-panel";
 import { EffectsPanel, type EffectActions } from "./effects-panel";
 import { EmojiPanel, type EmojiActions } from "./emoji-panel";
+import { ExportDialog } from "./export-dialog";
 import { FiltersPanel } from "./filters-panel";
 import { FontPicker } from "./font-picker";
 import { LiveCaptions, lineAt } from "./live-captions";
 import { LookEditor } from "./look-editor";
 import { PictureLayers, useVideoFilter, viewTransform } from "./picture-layers";
-import { ReelTimeline, type TimelineItem } from "./reel-timeline";
+import { ReelTimeline, type TimelineDrag, type TimelineItem } from "./reel-timeline";
 import { CuePlayer, MusicPlayer, preloadSounds } from "./sfx-player";
 import { StylePicker } from "./style-picker";
 import { soundOfWord, TranscriptEditor, WordPanel, type WordActions } from "./transcript-editor";
@@ -36,8 +37,10 @@ export type EditorOptions = { style: ReelStyle; look: ReelLookChanges; fonts: Re
 type Draft = { options: EditorOptions; edit: ReelEdit };
 type History = { past: Draft[]; present: Draft; future: Draft[]; group?: string; at?: number };
 
-const TABS = ["Ask AI", "Style", "Text", "Cuts", "B-roll", "Emojis", "Effects", "Filters", "Audio"] as const;
+const TABS = ["Ask AI", "Style", "Text", "Cuts", "B-roll", "Emojis", "Effects", "Looks", "Audio"] as const;
 type Tab = (typeof TABS)[number];
+// The tools' icons on the wide screens' rail, where Ask AI has a column of its own.
+const TAB_ICON: Record<Tab, LucideIcon> = { "Ask AI": Sparkles, Style: Captions, Text: FileText, Cuts: Scissors, "B-roll": Film, Emojis: Smile, Effects: Wand2, Looks: Palette, Audio: AudioLines };
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const same = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b);
 const ms = (t: number) => Math.round(t * 1000) / 1000;
@@ -60,6 +63,10 @@ export function ReelEditor({
   initialExport,
   editableUntil,
   startAt,
+  askFirst,
+  watermark = false,
+  local = false,
+  heard,
 }: {
   jobId: string;
   name: string;
@@ -70,12 +77,25 @@ export function ReelEditor({
   editableUntil: string;
   /** Opened from the reel's page at this second: the editor starts there, with that moment's caption open to edit. */
   startAt?: number;
+  /** A change asked for when the reel was made (a template's "Anything to change?"): the editor opens on Ask AI with it typed in. */
+  askFirst?: string;
+  /** A free-trial reel: it exports with the "Made with Hyped" mark (the export dialog says so). */
+  watermark?: boolean;
+  /**
+   * A clip opened straight from this computer, not uploaded (the prompt box in demo mode): it plays and edits as any
+   * reel does; what needs the server (Ask AI, B-roll search, Export) says so.
+   */
+  local?: boolean;
+  /** A local clip's words, once they've been heard (they come after the editor opens): its captions. */
+  heard?: ReelEdit["words"] | null;
 }) {
   const router = useRouter();
   const [history, setHistory] = useState<History>({ past: [], present: { options, edit }, future: [] });
   const [exported, setExported] = useState<Draft>({ options, edit });
   const draft = history.present;
-  const [tab, setTab] = useState<Tab>("Style");
+  const [tab, setTab] = useState<Tab>(askFirst ? "Ask AI" : "Style");
+  // Until it's sent once: the chat panel starts again each time its tab opens.
+  const [asked, setAsked] = useState(askFirst);
   const [selected, setSelected] = useState<number | null>(null);
   const [selectedTrim, setSelectedTrim] = useState<number | null>(null);
   const [selectedShot, setSelectedShot] = useState<number | null>(null);
@@ -84,6 +104,7 @@ export function ReelEditor({
   const [exportState, setExportState] = useState<ReelExport | null>(initialExport);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   // Editing right on the video: a word (or the hook), and what it said before, for Escape.
   const [inline, setInline] = useState<{ word: number; original: string } | { hook: true; original: string } | null>(null);
 
@@ -100,6 +121,11 @@ export function ReelEditor({
   const redo = () => setHistory((h) => (h.future.length ? { past: [...h.past, h.present], present: h.future[0], future: h.future.slice(1) } : h));
   const setOptions = (patch: Partial<EditorOptions>, group?: string) => update((d) => ({ ...d, options: { ...d.options, ...patch } }), group);
   const setEdit = (change: (e: ReelEdit) => ReelEdit, group?: string) => update((d) => ({ ...d, edit: change(d.edit) }), group);
+
+  // A local clip's words land when they've been heard, as one step: its captions appear on the clip being edited.
+  useEffect(() => {
+    if (heard?.length) update((d) => ({ ...d, edit: { ...d.edit, words: heard } }));
+  }, [heard, update]);
 
   // Undo and redo from the keyboard, except while typing.
   useEffect(() => {
@@ -180,13 +206,19 @@ export function ReelEditor({
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
-    const tick = () => {
+    let drawn = 0;
+    const tick = (now: number) => {
       const v = video.current;
       if (v) {
         const { trims: cut, cutAt: at, duration } = clocks.current;
         const k = trimAt(cut, v.currentTime);
         if (k >= 0 && !v.paused) v.currentTime = Math.min(duration, cut[k].end + 0.002);
-        setTime(v.currentTime);
+        // The editor redraws about 25 times a second while it plays (captions and effects need no more), so a big clip
+        // on a slow computer still plays smoothly; skipping the cuts and the sounds keep to every frame.
+        if (now - drawn >= 40) {
+          drawn = now;
+          setTime(v.currentTime);
+        }
         sounds.current.tick(at.toCut(v.currentTime), !v.paused);
         music.current.tick(at.toCut(v.currentTime), !v.paused);
       }
@@ -383,6 +415,88 @@ export function ReelEditor({
     },
   };
 
+  // Editing on the timeline: a piece dragged (moved, or resized by an edge), a stretch of the video cut out, the picked
+  // piece removed. A drag works from the edit as it was when the drag began, so the pieces' order can't shift under it,
+  // and it's one undo step. Moved pieces snap to the playhead.
+  const [timelinePick, setTimelinePick] = useState<TimelineItem | null>(null);
+  const [range, setRange] = useState<[number, number] | null>(null);
+  const dragBase = useRef<ReelEdit | null>(null);
+  const near = (t: number) => ms(Math.max(0, Math.min(draft.edit.duration, Math.abs(t - time) < 0.12 ? time : t)));
+  const dragPiece = ({ item, mode, delta }: TimelineDrag) => {
+    const base = (dragBase.current ??= draft.edit);
+    const group = `timeline-${JSON.stringify(item)}`;
+    if (item.kind === "broll") {
+      const shots = base.broll.map((s, i) =>
+        i !== item.index
+          ? s
+          : mode === "move"
+            ? { ...s, at: near(s.at + delta) }
+            : mode === "end"
+              ? { ...s, length: ms(Math.max(BROLL_LENGTH.min, s.length + delta)) }
+              : { ...s, at: near(s.at + delta), length: ms(Math.max(BROLL_LENGTH.min, s.length - delta)) },
+      );
+      setEdit(() => ({ ...base, broll: parseBroll(shots, base.duration) }), group);
+    } else if (item.kind === "effect") {
+      const old = base.effects[item.index];
+      const spec = EFFECTS[old.effect];
+      const next = mode === "end" ? { ...old, length: ms(Math.max(spec.min, Math.min(spec.max, old.length + delta))) } : { ...old, at: near(old.at + delta) };
+      // Its sound goes along, as when it's moved in the Effects tab.
+      const paired = pairedSound(base, old);
+      setEdit(() => ({ ...base, effects: base.effects.map((x, k) => (k === item.index ? next : x)).sort((a, b) => a.at - b.at), sounds: base.sounds.map((s, k) => (k === paired ? { ...s, at: next.at } : s)).sort((a, b) => a.at - b.at) }), group);
+    } else if (item.kind === "sound") {
+      setEdit(() => ({ ...base, sounds: base.sounds.map((s, k) => (k === item.index ? { ...s, at: near(s.at + delta) } : s)).sort((a, b) => a.at - b.at) }), group);
+    } else if (item.kind === "trim") {
+      const t = base.trims[item.index];
+      const shift = near(t.start + delta) - t.start;
+      const moved = mode === "move" ? { ...t, start: t.start + shift, end: t.end + shift } : mode === "start" ? { ...t, start: near(Math.min(t.end - 0.05, t.start + delta)) } : { ...t, end: near(Math.max(t.start + 0.05, t.end + delta)) };
+      setEdit(() => ({ ...base, trims: parseTrims(base.trims.map((x, k) => (k === item.index ? moved : x)), base.duration) }), group);
+    }
+  };
+  const endDrag = () => {
+    dragBase.current = null;
+    // Its place among the pieces may have changed.
+    setTimelinePick(null);
+  };
+  const cutRange = () => {
+    if (range && range[1] - range[0] >= 0.1) setTrims((t) => [...t, { start: ms(range[0]), end: ms(range[1]), reason: "cut" }]);
+    setRange(null);
+  };
+  const removePicked = () => {
+    const p = timelinePick;
+    if (p?.kind === "broll") brollActions.remove(p.index);
+    else if (p?.kind === "effect") effectActions.remove(p.index);
+    else if (p?.kind === "sound") soundActions.remove(p.index);
+    else if (p?.kind === "trim") trimActions.restore(p.index);
+    else return;
+    setTimelinePick(null);
+  };
+
+  // The keys, as a video editor's: Space plays, the arrows step (Shift: a second), Delete removes what's picked on the
+  // timeline or cuts the stretch selected on it, Escape lets go. Not while typing, on a focused control, or in a dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (e.metaKey || e.ctrlKey || e.altKey || target.closest("input, textarea, select, [contenteditable=true]") || document.querySelector("dialog[open]")) return;
+      if (e.key === " " && !target.closest("button, a, [role=button]")) {
+        e.preventDefault();
+        toggle();
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        seek(Math.max(0, Math.min(draft.edit.duration, time + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : 0.1))));
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        if (range) cutRange();
+        else if (timelinePick) removePicked();
+        else return;
+        e.preventDefault();
+      } else if (e.key === "Escape") {
+        setRange(null);
+        setTimelinePick(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   // Editing on the video: click a word (or the hook) and it pauses, with an edit bar under the picture. The Text tab
   // follows along, so both ways of editing stay in step.
   const editWord = (word: number) => {
@@ -429,6 +543,8 @@ export function ReelEditor({
 
   // A piece picked on the timeline: go there and open what edits it.
   const pick = (item: TimelineItem) => {
+    setTimelinePick(item);
+    setRange(null);
     if (item.kind === "trim") {
       setTab("Cuts");
       trimActions.select(item.index);
@@ -441,6 +557,8 @@ export function ReelEditor({
     } else if (item.kind === "effect") {
       seek(Math.max(0, draft.edit.effects[item.index].at - 0.6));
       setTab("Effects");
+    } else if (item.kind === "music") {
+      setTab("Audio");
     } else {
       seek(Math.max(0, draft.edit.sounds[item.index].at - 0.6));
       setTab("Audio");
@@ -487,17 +605,22 @@ export function ReelEditor({
   const until = new Date(editableUntil).toLocaleDateString("en", { day: "numeric", month: "short" });
   const keyName = behind ? "big word" : "highlight";
 
+  // On wide screens Ask AI has its own column, so the tools' panel shows Style while Ask AI is the chosen tab.
+  const panelTab: Tab = tab === "Ask AI" ? "Style" : tab;
+  // The reel keeps its clip's shape: tall clips get the narrow preview, wide and square ones a wider one.
+  const portrait = draft.edit.height >= draft.edit.width * 1.15;
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6">
+    <div className="mx-auto w-full max-w-[1600px] px-4 py-4 sm:px-6">
       {/* The bar: back, name, undo and redo, export. */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ButtonLink href={`/dashboard/videos/${jobId}`} variant="tertiary" size="sm" aria-label="Back to the reel">
+        <ButtonLink href={local ? "/dashboard" : `/dashboard/videos/${jobId}`} variant="tertiary" size="sm" aria-label={local ? "Back to the dashboard" : "Back to the reel"}>
           <ArrowLeft />
         </ButtonLink>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-base font-medium text-gray-1000">Edit reel</h1>
           <p className="truncate text-xs text-gray-900">
-            {name} · free exports until {until}
+            {name} · {local ? "on this computer, not uploaded" : `free exports until ${until}`}
           </p>
         </div>
         <Button variant="tertiary" size="sm" onClick={undo} disabled={!history.past.length} aria-label="Undo">
@@ -506,11 +629,12 @@ export function ReelEditor({
         <Button variant="tertiary" size="sm" onClick={redo} disabled={!history.future.length} aria-label="Redo">
           <Redo2 />
         </Button>
-        <Button variant="primary" onClick={exportVideo} disabled={busy || rendering || (!dirty && exportState?.status !== "failed")}>
+        <Button variant="primary" onClick={() => setExportOpen(true)} disabled={local || busy || rendering || (!dirty && exportState?.status !== "failed")} title={local ? "Exporting needs the clip uploaded, which demo mode can't do" : undefined}>
           {busy || rendering ? <LoaderCircle className="animate-spin" /> : <Check />}
-          {rendering ? "Exporting…" : "Export video"}
+          {rendering ? "Exporting…" : "Export"}
         </Button>
       </div>
+      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} onExport={() => void exportVideo()} watermark={watermark} until={until} />
       {(error || exportState) && (
         <p className={cn("mb-4 rounded-md border px-3 py-2 text-[13px]", error || exportState?.status === "failed" ? "border-red-500/40 text-red-900" : "border-gray-alpha-400 text-gray-1000")} role="status">
           {error ??
@@ -529,10 +653,20 @@ export function ReelEditor({
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
-        {/* The preview: the clean video with everything the render adds, drawn live. */}
-        <div className="lg:sticky lg:top-4 lg:self-start">
-          <div ref={frameRef} className="relative mx-auto aspect-[9/16] w-full max-w-[240px] overflow-hidden rounded-xl bg-black sm:max-w-[300px] lg:max-w-[340px]">
+      {/* Wide screens, as Cardboard's editor: the tools' rail and panel, the preview in the middle, Ask AI always open on
+          the right, the timeline below. Phones: the preview, then the tools as tabs, Ask AI among them. */}
+      <div className="grid gap-4 lg:h-[calc(100dvh-15rem)] lg:min-h-[560px] lg:grid-cols-[44px_minmax(0,300px)_minmax(0,1fr)_minmax(0,340px)] lg:gap-5">
+        {/* The preview: the clean video with everything the render adds, drawn live, in the reel's own shape (the render
+            keeps the clip's), as large as the column allows. */}
+        <div className="lg:col-start-3 lg:row-start-1 lg:flex lg:flex-col lg:items-center lg:justify-center lg:overflow-y-auto">
+          <div
+            ref={frameRef}
+            className={cn(
+              "relative mx-auto w-full overflow-hidden rounded-xl bg-black",
+              portrait ? "max-w-[240px] sm:max-w-[300px] lg:max-w-[min(340px,calc((100dvh-22rem)*0.5625))]" : "max-w-[640px] lg:max-w-[min(720px,calc((100dvh-22rem)*var(--shape)))]",
+            )}
+            style={{ aspectRatio: `${draft.edit.width} / ${draft.edit.height}`, "--shape": draft.edit.width / draft.edit.height } as React.CSSProperties}
+          >
             {svg}
             <video
               ref={video}
@@ -540,7 +674,7 @@ export function ReelEditor({
               playsInline
               preload="auto"
               className="absolute inset-0 size-full object-cover"
-              style={{ ...viewTransform(zoom, fx.dx, fx.dy, zoomAim(9, 16)), filter }}
+              style={{ ...viewTransform(zoom, fx.dx, fx.dy, zoomAim(draft.edit.width, draft.edit.height)), filter }}
               onClick={toggle}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
@@ -595,7 +729,7 @@ export function ReelEditor({
               {"word" in inline && <WordPanel word={inline.word} edit={draft.edit} keyName={keyName} emojisOn={draft.options.emojis && !behind} zoomsOn={draft.options.zooms} sfxOn={draft.options.sfx} cut={cutWords.has(inline.word)} actions={wordActions} dark />}
             </InlineEditor>
           )}
-          <div className="mx-auto mt-3 flex w-full max-w-[300px] items-center gap-3 lg:max-w-[340px]">
+          <div className={cn("mx-auto mt-3 flex w-full items-center gap-3", portrait ? "max-w-[300px] lg:max-w-[340px]" : "max-w-[640px]")}>
             <Button variant="tertiary" size="sm" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
               {playing ? <Pause /> : <Play />}
             </Button>
@@ -607,19 +741,39 @@ export function ReelEditor({
           {behind && <p className="mx-auto mt-2 max-w-[340px] text-center text-xs text-gray-900">In the video, the big words go behind you.</p>}
         </div>
 
-        {/* What to change. */}
-        <div className="min-w-0">
-          <div className="mb-4 flex h-10 items-center gap-0.5 overflow-x-auto rounded-md border border-gray-alpha-400 bg-background-100 p-1" role="tablist" aria-label="Edit">
-            {TABS.map((t) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={cn("h-full flex-1 shrink-0 whitespace-nowrap rounded px-2 text-[13px] transition-colors sm:px-3 sm:text-sm", tab === t ? "bg-gray-alpha-200 font-medium text-gray-1000" : "text-gray-900 hover:text-gray-1000")}>
-                {t}
+        {/* The tools: a rail of icons on wide screens, tabs on phones. */}
+        <div className="hidden lg:col-start-1 lg:row-start-1 lg:flex lg:flex-col lg:gap-1" role="tablist" aria-label="Tools" aria-orientation="vertical">
+          {TABS.filter((t) => t !== "Ask AI").map((t) => {
+            const Icon = TAB_ICON[t];
+            return (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={panelTab === t}
+                aria-label={t}
+                title={t}
+                onClick={() => setTab(t)}
+                className={cn("flex size-11 items-center justify-center rounded-lg transition-colors", panelTab === t ? "bg-gray-alpha-200 text-gray-1000" : "text-gray-900 hover:bg-gray-alpha-100 hover:text-gray-1000")}
+              >
+                <Icon className="size-[18px]" />
               </button>
-            ))}
-          </div>
+            );
+          })}
+        </div>
+        <div className="flex h-10 items-center gap-0.5 overflow-x-auto rounded-md border border-gray-alpha-400 bg-background-100 p-1 lg:hidden" role="tablist" aria-label="Edit">
+          {TABS.map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={cn("h-full flex-1 shrink-0 whitespace-nowrap rounded px-2 text-[13px] transition-colors sm:px-3 sm:text-sm", tab === t ? "bg-gray-alpha-200 font-medium text-gray-1000" : "text-gray-900 hover:text-gray-1000")}>
+              {t}
+            </button>
+          ))}
+        </div>
 
-          {tab === "Ask AI" && <ChatPanel messages={chat} busy={asking} onSend={(m) => void ask(m)} onUndo={undo} />}
+        {/* What to change: the chosen tool. */}
+        <div className={cn("min-w-0 lg:col-start-2 lg:row-start-1 lg:overflow-y-auto lg:pr-1", tab === "Ask AI" && "hidden lg:block")}>
+          <p className="mb-3 hidden text-sm font-medium text-gray-1000 lg:block">{panelTab}</p>
 
-          {tab === "Style" && (
+          {panelTab === "Style" && (
             <div className="space-y-5">
               <StylePicker value={draft.options.style} onChange={(style) => setOptions({ style })} changes={draft.options.look} />
               {behind && (
@@ -632,7 +786,7 @@ export function ReelEditor({
             </div>
           )}
 
-          {tab === "Text" && (
+          {panelTab === "Text" && (
             <TranscriptEditor
               edit={draft.edit}
               lines={lines}
@@ -653,13 +807,15 @@ export function ReelEditor({
             />
           )}
 
-          {tab === "Cuts" && <CutsPanel edit={draft.edit} cutLength={view.duration} time={time} selected={selectedTrim} actions={trimActions} />}
+          {panelTab === "Cuts" && <CutsPanel edit={draft.edit} cutLength={view.duration} time={time} selected={selectedTrim} actions={trimActions} />}
 
-          {tab === "B-roll" && <BrollPanel jobId={jobId} rows={brollRows} portrait={draft.edit.height > draft.edit.width} time={viewTime} current={shotHere} selected={selectedShot} actions={brollActions} />}
+          {panelTab === "B-roll" && local && <ServerOnly what="Stock B-roll search" />}
 
-          {tab === "Emojis" && <EmojiPanel edit={draft.edit} lines={lines} time={time} on={draft.options.emojis} behind={behind} actions={emojiActions} />}
+          {panelTab === "B-roll" && !local && <BrollPanel jobId={jobId} rows={brollRows} portrait={draft.edit.height > draft.edit.width} time={viewTime} current={shotHere} selected={selectedShot} actions={brollActions} />}
 
-          {tab === "Effects" && (
+          {panelTab === "Emojis" && <EmojiPanel edit={draft.edit} lines={lines} time={time} on={draft.options.emojis} behind={behind} actions={emojiActions} />}
+
+          {panelTab === "Effects" && (
             <div className="space-y-5">
               <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-alpha-400 p-3 text-sm">
                 <input type="checkbox" checked={draft.options.zooms} onChange={(e) => setOptions({ zooms: e.target.checked })} className="mt-0.5 size-4 accent-[var(--ds-gray-1000)]" />
@@ -672,14 +828,42 @@ export function ReelEditor({
             </div>
           )}
 
-          {tab === "Filters" && <FiltersPanel picture={draft.edit.picture} onChange={setPicture} />}
+          {panelTab === "Looks" && <FiltersPanel picture={draft.edit.picture} onChange={setPicture} />}
 
-          {tab === "Audio" && <AudioPanel sounds={draft.edit.sounds} hookSound={draft.edit.hookSound} hookOn={hookShown} on={draft.options.sfx} time={time} audio={draft.edit.audio} actions={soundActions} />}
+          {panelTab === "Audio" && <AudioPanel sounds={draft.edit.sounds} hookSound={draft.edit.hookSound} hookOn={hookShown} on={draft.options.sfx} time={time} audio={draft.edit.audio} actions={soundActions} />}
+        </div>
+
+        {/* Ask AI: always open beside the preview on wide screens; a tab on phones. */}
+        <div className={cn("min-w-0 lg:col-start-4 lg:row-start-1 lg:flex lg:flex-col", tab !== "Ask AI" && "hidden")}>
+          <p className="mb-3 hidden items-center gap-1.5 text-sm font-medium text-gray-1000 lg:flex">
+            <Sparkles className="size-3.5 text-brand" /> Ask AI
+          </p>
+          <div className="min-h-0 lg:flex-1">
+            {local ? <ServerOnly what="Ask AI" /> : <ChatPanel messages={chat} busy={asking} onSend={(m) => (setAsked(undefined), void ask(m))} onUndo={undo} draft={asked} fill />}
+          </div>
         </div>
       </div>
 
-      <div className="mt-6">
-        <ReelTimeline edit={draft.edit} lines={lines} windows={windows} broll={brollSpans} time={time} duration={draft.edit.duration} showEmojis={draft.options.emojis && !behind} showZooms={draft.options.zooms} showSounds={draft.options.sfx} onSeek={seek} onPick={pick} />
+      <div className="mt-4">
+        <ReelTimeline
+          edit={draft.edit}
+          lines={lines}
+          windows={windows}
+          broll={brollSpans}
+          time={time}
+          duration={draft.edit.duration}
+          showEmojis={draft.options.emojis && !behind}
+          showZooms={draft.options.zooms}
+          showSounds={draft.options.sfx}
+          selected={timelinePick}
+          range={range}
+          onSeek={seek}
+          onPick={pick}
+          onDrag={dragPiece}
+          onDragEnd={endDrag}
+          onRange={(r) => (setRange(r), r && setTimelinePick(null))}
+          onCutRange={cutRange}
+        />
       </div>
     </div>
   );
@@ -721,5 +905,14 @@ function InlineEditor({ label, value, maxLength, onChange, onDone, onCancel, chi
       </div>
       {children}
     </div>
+  );
+}
+
+/** In a clip opened from this computer: what needs the clip uploaded, and why it isn't here. */
+function ServerOnly({ what }: { what: string }) {
+  return (
+    <p className="rounded-lg border border-dashed border-gray-alpha-500 p-3 text-[13px] text-gray-900">
+      <span className="font-medium text-gray-1000">{what}</span> works once your clip is uploaded and its first cut is made, with captions from what you say. Demo mode can&apos;t upload: try it on your account.
+    </p>
   );
 }

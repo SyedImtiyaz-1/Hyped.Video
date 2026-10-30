@@ -1,7 +1,8 @@
 "use client";
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useGalleryFilter } from "@/components/recipes/gallery-filter";
 import { cn } from "@/lib/cn";
 
 type Tab = "recipes" | "projects";
@@ -12,6 +13,11 @@ type Tab = "recipes" | "projects";
  */
 export function HomeTabs({ recipes, projects }: { recipes: React.ReactNode; projects: React.ReactNode }) {
   const [tab, setTab] = useState<Tab>("recipes");
+  // A category chip under the prompt box opens the templates.
+  const filter = useGalleryFilter();
+  useEffect(() => {
+    if (filter?.jump) setTab("recipes");
+  }, [filter?.jump]);
   const tabs: { id: Tab; label: string; all: string }[] = [
     { id: "recipes", label: "Templates", all: "/dashboard/recipes" },
     { id: "projects", label: "Your projects", all: "/dashboard/videos" },

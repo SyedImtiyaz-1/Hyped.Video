@@ -1,9 +1,8 @@
 "use client";
 import { ArrowRight, Film, LoaderCircle, Upload, X } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { creditsForReel, REEL_DEFAULTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_SECONDS, REEL_SECONDS_PER_CREDIT, REEL_UPLOAD_TYPES, type ReelLanguage, type ReelOptions, type ReelUploadType } from "@launchreel/core/reel";
+import { REEL_DEFAULTS, REEL_LANGUAGES, REEL_MAX_BYTES, REEL_MAX_SECONDS, REEL_SECONDS_PER_CREDIT, type ReelLanguage, type ReelOptions } from "@launchreel/core/reel";
 import { REEL_CLEANUPS, type ReelCleanup } from "@launchreel/core/trims";
 import { EDIT_STYLES, isEditStyle } from "@launchreel/core/edit-styles";
 import { takePendingClip } from "@/lib/pending-clip";
@@ -14,12 +13,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { REEL_LANGUAGE_LABEL } from "./labels";
-import { measureVideo, type VideoInfo } from "./measure";
 import { EditStylePicker } from "./edit-style-picker";
 import { FontPicker } from "./font-picker";
 import { LookEditor } from "./look-editor";
 import { StylePicker } from "./style-picker";
-import { uploadVideo, type Uploaded, type UploadJob } from "./upload";
+import { megabytes, minutes, shape, useReelUpload } from "./use-reel-upload";
 
 const EXTRAS: { key: "emojis" | "zooms" | "sfx" | "hook" | "broll"; label: string; hint: string }[] = [
   { key: "emojis", label: "Emojis", hint: "One on a line where it fits" },
@@ -41,115 +39,41 @@ const LANGUAGE_HINT: Record<ReelLanguage, string> = {
   hinglish: "Hindi and English, written in Roman script the way you'd type it. Beta.",
 };
 
-/** The upload's type from the browser, or from the file name when the browser doesn't say (common for .mov). */
-function uploadType(file: File): ReelUploadType | null {
-  const type = file.type.toLowerCase();
-  if (type in REEL_UPLOAD_TYPES) return type as ReelUploadType;
-  const ext = file.name.split(".").pop()?.toLowerCase();
-  if (type === "video/x-m4v" || ext === "mp4" || ext === "m4v") return "video/mp4";
-  if (ext === "mov" || ext === "qt") return "video/quicktime";
-  return ext === "webm" ? "video/webm" : null;
-}
-
-const minutes = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-const megabytes = (bytes: number) => (bytes >= 1024 ** 3 ? `${Math.round((bytes / 1024 ** 3) * 10) / 10} GB` : `${Math.max(1, Math.round(bytes / 1024 / 1024))} MB`);
-const shape = (info: VideoInfo) => (!info.width || !info.height ? null : info.height > info.width * 1.15 ? "9:16" : info.width > info.height * 1.15 ? "16:9" : "1:1");
-
-type Picked = { file: File; type: ReelUploadType; info: VideoInfo; url: string };
-
 /**
  * `pending`: opened from the homepage with a clip picked there (true: it's waiting in this browser; false: it couldn't be
- * kept, so the form asks for it again). `startStyle`: the edit style picked with it.
+ * kept, so the form asks for it again). `startStyle`: the edit style to start from (picked with that clip, or a reel
+ * template's).
  */
 export function ReelForm({ credits, reelCredits = 0, trial, pending, startStyle }: { credits: number; reelCredits?: number; trial: boolean; pending?: boolean; startStyle?: string }) {
-  const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
-  const upload = useRef<UploadJob | null>(null);
-  const [picked, setPicked] = useState<Picked | null>(null);
-  const [measuring, setMeasuring] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [options, setOptions] = useState<ReelOptions>(REEL_DEFAULTS);
   const [owner, setOwner] = useState(false);
-  const [phase, setPhase] = useState<"idle" | "uploading" | "starting">("idle");
-  const [sent, setSent] = useState(0);
-  // Kept after an upload, so fixing a problem (like buying credits) doesn't mean uploading again.
-  const [uploaded, setUploaded] = useState<{ file: File; result: Uploaded } | null>(null);
-  const [error, setError] = useState<{ message: string; upgrade?: boolean } | null>(null);
-  const cost = picked ? creditsForReel(picked.info.duration) : null;
-  const busy = phase !== "idle";
-  // Reel credits (from a reel pack) pay first, then credits, as /api/reels charges.
-  const fromReels = cost !== null && reelCredits >= cost;
-  const enough = cost === null || fromReels || credits >= cost;
+  const { picked, measuring, phase, sent, busy, error, setError, cost, fromReels, enough, choose, clear: unpick, start, cancel } = useReelUpload({ credits, reelCredits });
 
-  useEffect(() => () => upload.current?.cancel(), []);
-  // A clip picked on the homepage: its edit style, and the file itself when it was kept through sign-up.
+  // The edit style to start from, and a clip picked on the homepage or in a template: the file itself when it was kept.
   useEffect(() => {
-    if (pending === undefined) return;
     if (isEditStyle(startStyle)) setOptions((o) => ({ ...o, ...EDIT_STYLES[startStyle].options, look: { ...EDIT_STYLES[startStyle].options.look }, fonts: [...EDIT_STYLES[startStyle].options.fonts], editStyle: startStyle }));
+    if (pending === undefined) return;
     if (!pending) return setError({ message: "Choose your video again: this browser couldn't keep it while you signed up." });
-    void takePendingClip().then((clip) => (clip ? choose(clip.file) : setError({ message: "Choose your video again to start." })));
+    void takePendingClip().then((clip) => {
+      if (clip) void choose(clip.file);
+      else setError({ message: "Choose your video again to start." });
+    });
     // Once, when the page opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => () => void (picked && URL.revokeObjectURL(picked.url)), [picked]);
-
-  async function choose(file: File | undefined) {
-    if (!file || busy) return;
-    setError(null);
-    const type = uploadType(file);
-    if (!type) return setError({ message: "Upload an MP4, MOV or WebM video." });
-    if (file.size > REEL_MAX_BYTES) return setError({ message: `That file is ${megabytes(file.size)}. Videos can be up to ${megabytes(REEL_MAX_BYTES)}.` });
-    setMeasuring(true);
-    try {
-      const info = await measureVideo(file);
-      if (info.duration > REEL_MAX_SECONDS) return setError({ message: `That video is ${minutes(info.duration)} long. Videos can be up to ${REEL_MAX_SECONDS / 60} minutes: trim it and upload it again.` });
-      if (info.playable && (!info.width || !info.height)) return setError({ message: "That file has sound but no picture. Upload a video." });
-      setPicked({ file, type, info, url: URL.createObjectURL(file) });
-    } catch (err) {
-      setError({ message: (err as Error).message });
-    } finally {
-      setMeasuring(false);
-    }
-  }
 
   function clear() {
-    setPicked(null);
-    setError(null);
+    unpick();
     if (input.current) input.current.value = "";
   }
 
-  async function submit(e: React.FormEvent) {
+  function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!picked) return setError({ message: "Choose a video to upload." });
     if (!owner) return setError({ message: "Confirm that you own this video and have permission from everyone in it." });
-    setError(null);
-    try {
-      let result = uploaded?.file === picked.file ? uploaded.result : null;
-      if (!result) {
-        setPhase("uploading");
-        setSent(0);
-        upload.current = uploadVideo(picked.file, picked.type, setSent);
-        result = await upload.current.done;
-        setUploaded({ file: picked.file, result });
-      }
-      setPhase("starting");
-      const res = await fetch("/api/reels", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key: result.key, fileName: picked.file.name, durationSec: picked.info.duration, width: picked.info.width, height: picked.info.height, ...options, ownershipConfirmed: true }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (res.status === 404) setUploaded(null); // the upload is gone: send it again next time
-        return setError({ message: data.error ?? "Could not start the reel", upgrade: data.upgrade });
-      }
-      router.push(`/dashboard/videos/${data.id}`);
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") setError({ message: (err as Error).message || "Network error. Try again." }); // cancelled: nothing to say
-    } finally {
-      upload.current = null;
-      setPhase("idle");
-    }
+    void start(options);
   }
 
   return (
@@ -330,12 +254,12 @@ export function ReelForm({ credits, reelCredits = 0, trial, pending, startStyle 
           )}
           <div className="flex items-center justify-between gap-3 px-5 py-4">
             <span className={cn("text-[13px] tabular-nums", enough ? "text-gray-900" : "text-amber-900")}>
-              {fromReels ? plural(cost, "reel credit") : cost ? plural(cost, "credit") : `1 credit per ${REEL_SECONDS_PER_CREDIT} s`}
+              {cost === null ? `1 credit per ${REEL_SECONDS_PER_CREDIT} s` : plural(cost, fromReels ? "reel credit" : "credit")}
               <span className="hidden sm:inline"> · you have {fromReels || (cost === null && reelCredits > 0) ? plural(reelCredits, "reel credit") : credits}</span>
             </span>
             <div className="flex items-center gap-2">
               {phase === "uploading" && (
-                <Button type="button" onClick={() => upload.current?.cancel()}>
+                <Button type="button" onClick={cancel}>
                   Cancel
                 </Button>
               )}

@@ -8,18 +8,28 @@ import { ReelEditor } from "@/components/reels/reel-editor";
 import { getVideo } from "@/lib/data";
 import { readEdit } from "@/lib/reel-edits";
 import { requireUser } from "@/lib/user";
+import { FirstCut } from "./first-cut";
+import { ProductVideo } from "./product-video";
 
-export const metadata: Metadata = { title: "Edit reel" };
+export const metadata: Metadata = { title: "Editor" };
+export const dynamic = "force-dynamic";
 
-/** The reel editor, for a finished reel within its free-edit window that has its saved decisions. */
+/**
+ * The editor. The prompt box opens it as soon as a video starts, so it shows the first cut being made until it's ready
+ * (first-cut.tsx). Then a reel gets the reel editor, within its free-edit window and with its saved decisions; a product
+ * video gets its preview, files and Ask AI for revisions (product-video.tsx).
+ */
 export default async function EditReelPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ t?: string }> }) {
   const { id } = await params;
   // ?t=12.4: opened from the reel's player at that second.
   const t = Number((await searchParams).t);
   const user = await requireUser();
   const data = await getVideo(user.id, id);
-  const reel = data?.job.kind === "reel" ? parseReel(data.job.reel) : null;
-  if (!data || !reel) notFound();
+  if (!data) notFound();
+  if (data.job.status !== "SUCCEEDED") return <FirstCut job={data.job} />;
+  if (data.job.kind !== "reel") return <ProductVideo job={data.job} credits={user.credits} />;
+  const reel = parseReel(data.job.reel);
+  if (!reel) notFound();
   const { job } = data;
   const editable = reelEditable(job, reel);
   const edit = editable.ok ? await readEdit(id).catch(() => null) : null;
@@ -45,6 +55,9 @@ export default async function EditReelPage({ params, searchParams }: { params: P
       initialExport={reel.export ?? null}
       editableUntil={new Date(job.createdAt.getTime() + REEL_EDIT_DAYS * 86_400_000).toISOString()}
       startAt={Number.isFinite(t) && t >= 0 ? t : undefined}
+      // What the customer asked for when they made it from a reel template, until they've exported an edit.
+      askFirst={!reel.export && job.notes ? job.notes : undefined}
+      watermark={job.watermark}
     />
   );
 }

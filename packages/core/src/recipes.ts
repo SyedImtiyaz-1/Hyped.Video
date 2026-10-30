@@ -3,7 +3,8 @@
 // lengths it allows, and the inputs its form asks for. The 10 templates are the first 10 recipes, with the same ids, so
 // Job.template, old links and the agent's brief (templateBrief in runner/src/agent.ts) don't change.
 import type { MusicChoice, Quality, VideoType } from "./contract";
-import type { ReelEditStyle } from "./edit-styles";
+import { EDIT_STYLES, REEL_EDIT_STYLES, type ReelEditStyle } from "./edit-styles";
+import { REEL_MAX_SECONDS } from "./reel";
 import { TEMPLATES, type Template, type TemplateBeat, type TemplateGoal } from "./templates";
 import type { VoiceId } from "./voices";
 
@@ -142,12 +143,42 @@ const SOON: Recipe[] = [
   },
 ];
 
+/** The public site's recipes: product videos, and the reels coming soon. */
 export const RECIPES: readonly Recipe[] = [...TEMPLATES.map(fromTemplate), ...SOON];
 
 /** The recipes people can make today. */
 export const LIVE_RECIPES: readonly Recipe[] = RECIPES.filter((r) => r.status === "live");
 
-export const recipeById = (id?: string | null): Recipe | null => RECIPES.find((r) => r.id === id) ?? null;
+// Where each edit style sits in the dashboard's gallery, among the product videos' categories.
+const REEL_CATEGORY: Record<ReelEditStyle, RecipeCategory> = { creator: "talking-head", clean: "talking-head", behind: "talking-head", podcast: "clipping", hype: "vlog", cinematic: "vlog" };
+
+/**
+ * The reel edit styles as recipes, for the dashboard only: each makes a reel from the customer's own clip in that style
+ * (its captions, extras, grade and music), at the clip's own shape and length. The public site's recipe pages are about
+ * videos made from a product, so they leave these out.
+ */
+export const REEL_RECIPES: readonly Recipe[] = REEL_EDIT_STYLES.map((style) => ({
+  id: `reel-${style}`,
+  name: EDIT_STYLES[style].label,
+  pitch: EDIT_STYLES[style].hint,
+  category: REEL_CATEGORY[style],
+  kind: "reel",
+  tier: "standard",
+  format: "vertical",
+  formats: ["vertical", "landscape", "square"],
+  durationSec: 30,
+  durations: [1, REEL_MAX_SECONDS],
+  platforms: ["TikTok", "Reels & Shorts", "LinkedIn"],
+  inputs: [{ id: "clip", type: "files", label: "Your clip", hint: "A video you recorded: talking to camera works best", accept: ["video"], role: "speaker", min: 1, max: 1 }],
+  status: "live",
+  reel: { editStyle: style },
+}));
+
+/** Everything the dashboard's gallery shows: the recipes, then the reel styles. */
+export const ALL_RECIPES: readonly Recipe[] = [...RECIPES, ...REEL_RECIPES];
+
+/** Any recipe by id, the dashboard's reel styles included. */
+export const recipeById = (id?: string | null): Recipe | null => ALL_RECIPES.find((r) => r.id === id) ?? null;
 
 /** The categories that have at least one recipe, in the gallery's order. */
 export const usedRecipeCategories = (recipes: readonly Recipe[] = RECIPES) => RECIPE_CATEGORIES.filter((c) => recipes.some((r) => r.category === c.value));

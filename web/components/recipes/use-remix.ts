@@ -13,7 +13,7 @@ export type RemixError = { message: string; upgrade?: boolean; token?: boolean }
 
 /**
  * A recipe's choices and its Remix, shared by the recipe's page and its modal. Remix posts to /api/jobs exactly as the
- * step-by-step form does, with the recipe's choices filled in, then opens the new video. Private repos need a token,
+ * step-by-step form does, with the recipe's choices filled in, then opens the editor on its first cut. Private repos need a token,
  * which only that form saves.
  */
 export function useRemix({
@@ -76,7 +76,7 @@ export function useRemix({
       const data = await res.json().catch(() => ({}));
       // A repo GitHub doesn't show publicly needs a token, which the step-by-step form encrypts and saves.
       if (!res.ok) return setError({ message: data.error ?? "Could not start the video", upgrade: data.upgrade, token: res.status === 422 && /github\.com\//i.test(sourceUrl) });
-      router.push(`/dashboard/videos/${data.id}`);
+      router.push(`/dashboard/videos/${data.id}/edit`);
     } catch {
       setError({ message: "Network error. Try again." });
     } finally {

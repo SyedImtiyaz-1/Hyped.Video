@@ -1,25 +1,20 @@
-import { ArrowRight, AudioLines, Captions, Check, Clapperboard, FileText, Gift, Link2, Megaphone, MonitorSmartphone, Music, Share2, Sparkles } from "lucide-react";
-import { LIVE_RECIPES, PACKS, QUALITY_CREDIT_MULTIPLIER, TRIAL_CREDITS, perCredit } from "@launchreel/core";
+import { ArrowRight, AudioLines, Captions, Check, FileText, Gift, Megaphone, MonitorSmartphone, Music, Sparkles } from "lucide-react";
+import { PACKS, QUALITY_CREDIT_MULTIPLIER, TRIAL_CREDITS, perCredit } from "@launchreel/core";
 import { CreditTable } from "@/components/credit-table";
 import { PackCards, PriceNote, cheapestPack } from "@/components/pricing/pack-cards";
 import { ReelPackCard } from "@/components/pricing/reel-pack-card";
 import { reelPackOn } from "@/lib/dodo";
-import { FeatureBento } from "@/components/marketing/feature-bento";
+import { FeatureSteps } from "@/components/marketing/feature-steps";
 import { FloatingSamples } from "@/components/marketing/floating-samples";
 import { HeroPrompt } from "@/components/marketing/hero-prompt";
-import { RecipeGallery } from "@/components/recipes/recipe-gallery";
-import { ShowcaseMarquee } from "@/components/showcase/showcase-marquee";
+import { MadeWith } from "@/components/marketing/made-with";
+import { ThreeSteps } from "@/components/marketing/three-steps";
+import { UseCases } from "@/components/marketing/use-cases";
 import { ButtonLink } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { visitorCurrency } from "@/lib/region";
 import { SHOWCASE } from "@/lib/showcase";
 import { studioAvailable } from "@/lib/studio";
-
-const STEPS = [
-  { icon: Link2, title: "Paste a URL or repo", body: "Your website, or a GitHub repo, public or private. We read your real copy, colors, fonts and UI." },
-  { icon: Clapperboard, title: "We plan, build and render", body: "An agent writes the storyboard, animates your product, scores it and renders an MP4." },
-  { icon: Share2, title: "Share it everywhere", body: "Download the video with share copy. Ask for changes in plain English." },
-];
 
 // What every video comes with, whichever pack paid for it.
 const INCLUDED = [
@@ -84,61 +79,39 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
         />
       </section>
 
-      <section id="recipes" className="border-b border-gray-alpha-400 py-20">
-        <div className="mx-auto max-w-[1200px] px-4 md:px-8">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Start from a recipe</h2>
-              <p className="mt-3 max-w-xl text-gray-900">Proven videos you make your own. Pick one, add your product, and every choice is filled in. You can still change anything.</p>
-            </div>
-            <ButtonLink href="/recipes">
-              All {LIVE_RECIPES.length} recipes <ArrowRight />
-            </ButtonLink>
-          </div>
-          <div className="mt-8">
-            <RecipeGallery base="public" limit={6} />
-          </div>
-        </div>
-      </section>
-
       {SHOWCASE.length > 0 && (
         <section id="examples" className="border-b border-gray-alpha-400 py-20">
           <div className="mx-auto max-w-[1200px] px-4 md:px-8">
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Made with Hyped</h2>
-            <p className="mt-3 max-w-2xl text-gray-900">
-              Each of these came straight out of Hyped from a real product&apos;s site or repo, with no hand editing. Hover to preview, click to watch with sound.
-            </p>
-          </div>
-          <div className="mt-10">
-            <ShowcaseMarquee />
+            <div className="text-center">
+              <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-5xl">Made with Hyped</h2>
+              <p className="mx-auto mt-3 max-w-xl text-gray-900">Straight out of Hyped, from real products, with no hand editing. Hover to preview, click to watch with sound.</p>
+            </div>
+            <div className="mt-12">
+              <MadeWith />
+            </div>
           </div>
         </section>
       )}
 
       <section id="how" className="mx-auto max-w-[1200px] px-4 py-20 md:px-8">
-        <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">From link to launch video</h2>
-        <p className="mt-3 max-w-xl text-gray-900">Three steps. No editor, no timeline, no stock footage.</p>
-        <div className="mt-10 grid gap-px overflow-hidden rounded-xl border border-gray-alpha-400 bg-gray-alpha-400 md:grid-cols-3">
-          {STEPS.map(({ icon: Icon, title, body }, i) => (
-            <div key={title} className="bg-background-100 p-6">
-              <div className="flex items-center gap-3">
-                <span className="flex size-8 items-center justify-center rounded-md border border-gray-alpha-400 text-gray-1000">
-                  <Icon className="size-4" />
-                </span>
-                <span className="font-mono text-xs text-gray-900">0{i + 1}</span>
-              </div>
-              <h3 className="mt-5 text-base font-semibold">{title}</h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-gray-900">{body}</p>
-            </div>
-          ))}
+        <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Three steps to your first video</h2>
+        <p className="mt-3 max-w-xl text-gray-900">Paste it, direct it, share it. Here&apos;s how a first cut comes together.</p>
+        <div className="mt-10">
+          <ThreeSteps />
         </div>
       </section>
 
       <section id="features" className="mx-auto max-w-[1200px] px-4 pb-20 md:px-8">
-        <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Everything a launch needs</h2>
-        <p className="mt-3 max-w-2xl text-gray-900">Product videos from your site, and reels from the clips you record. Every video comes with all of it, whichever pack paid for it.</p>
+        <h2 className="text-3xl font-semibold tracking-[-0.04em] md:text-4xl">Everything a video needs, in one place</h2>
+        <p className="mt-3 max-w-2xl text-gray-900">The story, the edit and the export. Hyped does the work; you make the calls. Product videos from your site, reels from the clips you record.</p>
         <div className="mt-10">
-          <FeatureBento />
+          <FeatureSteps />
+        </div>
+      </section>
+
+      <section id="use-cases" className="border-t border-gray-alpha-400">
+        <div className="mx-auto max-w-[1200px] px-4 py-20 md:px-8">
+          <UseCases />
         </div>
       </section>
 

@@ -68,7 +68,7 @@ function Sample({ video: v }: { video: ShowcaseVideo }) {
   if (!recipe || broken) return null;
   return (
     <a href={`/dashboard/recipes/${recipe.id}`} onClick={(e) => open(e, recipe.id)} aria-label={`Remix ${recipe.name}, made for ${v.product}`} className={cn(TILE, SHAPE[v.format])}>
-      <SampleMedia video={v} onBroken={() => setBroken(true)} />
+      <SampleMedia video={v} onBroken={() => setBroken(true)} autoplay />
       <TileCaption title={recipe.name} detail={`${v.product} · ${v.durationSec}s`} />
     </a>
   );
