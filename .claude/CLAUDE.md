@@ -45,7 +45,28 @@ then `docs/STRATEGY.md`, `docs/PLAN.md`, `docs/UNIT_ECONOMICS.md`.
   The 3–4 Nov work after it (the editor in Cardboard's look, Ask AI's "Worked for" steps, renaming projects with
   `Job.title`, no Revisions card on the video page: Syed asked on Slack, 3 Nov, since changes go through the editor's
   Ask AI) is PR #18 (`launch/editor-look`), merged with `main` on 5 Nov (PR #16's editor and ours together) and
-  retargeted to `main`; open for Syed's review; it needs `npm run prod:db` for `Job.title`.
+  retargeted to `main`; Syed merged it into `main` on 5 Nov; it needs `npm run prod:db` for `Job.title`.
+  Syed asks for PR links and the day's work in #daily-updates, as a reply in that day's bot thread (6 Nov).
+- Syed's two documents (5 Nov, Slack): the agent skills research (video quality: a review gate, a second model as
+  critic, a HyperFrames trial, in three waves) and the launch plan with dates (deploy by 13 Nov, Product Hunt 3 Dec).
+  Taibanaz's decisions on both (6 Nov) are in `docs/ROADMAP.md`: all as recommended, except marketing: she doesn't take
+  outreach or customer and beta calls (someone part-time); she approves the launch copy. Her dates: the Product Hunt
+  "coming soon" page by 9 Nov (Claude drafts), the golden set rated blind with Syed on 12–13 Nov, the launch copy
+  23–27 Nov, go/no-go on 30 Nov, the users' email on 1 Dec, editor part B (web side) 14 Dec – 5 Feb.
+  The Product Hunt page's tagline (Taibanaz, 6 Nov): "Make a launch video from a link, or edit your own clip"; logo
+  `web/public/brand/hyped-icon-240.png`. Syed, asked which account should make the page (6 Nov): "Leave this", so the
+  coming-soon page is off her list for now.
+- Sign-up and sign-in as Cardboard's (Taibanaz, 6 Nov; PR #19, `launch/sign-up-pages` → `main`, with her decisions
+  above; open for Syed's review; screenshots sent to him on Slack with the ask to lower Clerk's 15-character
+  minimum password to 8): always dark,
+  the Clerk form on the left under a serif heading ("Make your first video" / "Welcome back") with the terms under it, and
+  on wide screens a panel on the right with our showcase posters fanned behind a prompt box that types asks, and three
+  chips (`components/auth/`: `auth-shell.tsx`, `auth-showcase.tsx`, `auth-appearance.ts` as style objects, since Clerk's
+  CSS-in-JS beats Tailwind's layer). Clerk's own pages only: `signInUrl`/`signUpUrl` on ClerkProvider and
+  clerkMiddleware, and the landing's Log in / Start free go to them instead of Clerk's modal. The form's fields (names,
+  password, Google only as Cardboard's sign-up) are set in Clerk's dashboard, which is Syed's. No "Optional" by the name
+  fields (Taibanaz, 6 Nov), Clerk's bot check ("Verify you are human") dark, a skeleton of the form while Clerk's
+  script loads, and a signed-in visitor sent on (`leaveIfSignedIn`), since Clerk's forms render nothing for them.
 - PR #16 `launch/templates-skills` (Syed's Mac work, 26 Oct–3 Nov; merged into `main` 3 Nov, not yet deployed): 51 caption
   templates (`packages/core/src/caption-templates.ts`, `web/components/reels/template-gallery.tsx` in the reel form and
   the editor's Style tab, chat op `caption_template`) on new caption engine features (lockup layout, align, key-word

@@ -18,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
       {/* Clerk's provider goes inside <body>. Demo mode runs without Clerk. */}
-      <body>{isDemo ? content : <ClerkProvider appearance={{ variables: { colorPrimary: "#C8F135", colorTextOnPrimaryBackground: "#0A0A0A" } }}>{content}</ClerkProvider>}</body>
+      <body>{isDemo ? content : <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up" appearance={{ variables: { colorPrimary: "#C8F135", colorTextOnPrimaryBackground: "#0A0A0A" } }}>{content}</ClerkProvider>}</body>
     </html>
   );
 }

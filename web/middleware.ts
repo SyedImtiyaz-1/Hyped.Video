@@ -21,7 +21,7 @@ const clerk = clerkMiddleware(async (auth, req) => {
     return NextResponse.redirect(signUp);
   }
   if (isProtected(req)) await auth.protect();
-});
+}, { signInUrl: "/sign-in", signUpUrl: "/sign-up" }); // our own pages (auth-shell.tsx), never Clerk's hosted ones
 
 // www.hyped.video → hyped.video, keeping the path and query; before Clerk, so sign-in only ever happens on one host.
 function toApex(req: NextRequest) {

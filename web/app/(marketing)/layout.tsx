@@ -42,10 +42,10 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             ) : (
               <>
                 <SignedOut>
-                  <SignInButton mode="modal" forceRedirectUrl="/dashboard">
+                  <SignInButton forceRedirectUrl="/dashboard">
                     <button className={buttonClasses({ size: "sm" })}>Log in</button>
                   </SignInButton>
-                  <SignUpButton mode="modal" forceRedirectUrl="/dashboard">
+                  <SignUpButton forceRedirectUrl="/dashboard">
                     <button className={buttonClasses({ variant: "primary", size: "sm" })}>Start free</button>
                   </SignUpButton>
                 </SignedOut>

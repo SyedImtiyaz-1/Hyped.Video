@@ -169,6 +169,18 @@ Syed's plan. Done so far:
   layouts (edit model v2), more looks and the Director agent; 4K and 60 fps stay in Phase 3. Recipes' M2 and M3 follow.
 - **A desktop app (3 November):** a Hyped app for Mac, then Windows, as Cardboard has its Mac app, so Ask AI can bring a
   video in from Downloads with no file window (a web page can't). The plan, with Syed's open choices: `docs/DESKTOP_APP.md`.
+- **Quality and launch (6 November):** the decisions asked for in Syed's two documents of 5 November (the agent skills
+  research, §7, and the launch plan with dates), sent to him on Slack:
+  1. Gate each video on its review: a video that fails goes back to the agent once, then ships with its score shown.
+  2. A second, cheaper model grades against the rubric, not the model that built the video.
+  3. Try HyperFrames for three days; adopt it if it halves the minutes at the same score, else our own minimal format.
+  4. Wave 1 first (the gate, the critic, the plan as data), then the A/B, then the HyperFrames trial.
+  5. Launch on Product Hunt on Thu 3 December if the go/no-go on Mon 30 November passes; Thu 10 December if the
+     deploy slips past Fri 13 November.
+  6. Launch offer: bonus credits on every pack until Sun 6 December, with a real end date.
+  7. Marketing day to day (outreach, X, customer and beta calls): not Taibanaz; someone part-time. She keeps the
+     product and approves the launch copy (Product Hunt page, X thread, LinkedIn post, email).
+  8. After launch, the plan's order: composition layer, Mac app, editor part B, Recipes M2 and M3, the GitHub App.
 
 The others are still open; recommendation first in each.
 
