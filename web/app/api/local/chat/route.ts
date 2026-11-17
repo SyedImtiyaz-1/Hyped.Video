@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CHAT_SCHEMA, CHAT_SYSTEM, chatContext, needsFootage, parseChatOps, parseReelEdit, REEL_PLAN_MODEL } from "@launchreel/core";
+import { CHAT_SCHEMA, chatContext, chatMessages, needsFootage, parseChatOps, parseReelEdit, REEL_PLAN_MODEL } from "@launchreel/core";
 import { ChatBody, withSelection } from "@/lib/chat-body";
 import { openaiBase, openaiKey } from "@/lib/local-openai";
 import { requireUser } from "@/lib/user";
@@ -28,10 +28,7 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       model: REEL_PLAN_MODEL,
       reasoning_effort: "low",
-      messages: [
-        { role: "system", content: CHAT_SYSTEM },
-        { role: "user", content: `${withSelection(chatContext(draft, parsed.data.time), parsed.data.selection).slice(0, 60_000)}\n\nThe creator asks: ${parsed.data.message}` },
-      ],
+      messages: chatMessages(withSelection(chatContext(draft, parsed.data.time), parsed.data.selection), parsed.data.message, parsed.data.history),
       response_format: { type: "json_schema", json_schema: { name: "reel_chat", strict: true, schema: CHAT_SCHEMA } },
     }),
     signal: AbortSignal.timeout(60_000),

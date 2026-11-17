@@ -11,7 +11,7 @@ import { REEL_SOUNDS, type ReelSound } from "@launchreel/core/sounds";
 import { punchAt, soundCues, zoomAim, zoomWindows } from "@launchreel/core/timeline";
 import { cutClock, onCutTimeline, parseTrims, pauseTrims, trimAt, trimmedWords, wordsTrim, type Trim } from "@launchreel/core/trims";
 import { libraryBed, MUSIC_DEFAULT_VOLUME, ORIGINAL_MUSIC } from "@launchreel/core/music-beds";
-import { applyChatOps, type ChatOp } from "@launchreel/core/reel-chat";
+import { applyChatOps, CHAT_HISTORY, type ChatOp } from "@launchreel/core/reel-chat";
 import { BROLL_LENGTH, brollAt, longestShot, parseBroll, type BrollShot } from "@launchreel/core/broll";
 import { parseTransitions, type PlacedTransition, transitionDirs, transitionEffects, transitionJoints, type TransitionKind, transitionPlaces, TRANSITIONS, withTrims } from "@launchreel/core/transitions";
 import { cn } from "@/lib/cn";
@@ -846,6 +846,8 @@ export function ReelEditor({
   latest.current = history;
   const answered = useRef(0);
   const ask = async (message: string) => {
+    // The chat so far goes with it (the latest messages; failed ones left out), so "it", "more" and "undo that" make sense.
+    const said = chat.filter((m) => !m.failed).map((m) => ({ from: m.from, text: m.text }));
     setAsking(true);
     setChat((c) => [...c, { from: "you", text: message }]);
     // The answer's steps, under "Worked for": what was asked, what the assistant looked at, what it worked out.
@@ -862,7 +864,7 @@ export function ReelEditor({
     });
     // Live while it works, as Claude's and Cardboard's chats show it.
     setLive([...done, { title: "Working out the changes", status: "active" }, { title: "Making them in your reel", status: "pending" }]);
-    const res = await fetch(localAsk ? "/api/local/chat" : `/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present, selection: selection?.ai }) }).catch(() => null);
+    const res = await fetch(localAsk ? "/api/local/chat" : `/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present, selection: selection?.ai, history: said.slice(-CHAT_HISTORY.turns) }) }).catch(() => null);
     const body = res ? ((await res.json().catch(() => ({}))) as { reply?: string; ops?: ChatOp[]; error?: string }) : { error: "You're offline. Try again in a moment." };
     setAsking(false);
     setLive(null);
