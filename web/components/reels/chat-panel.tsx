@@ -1,4 +1,5 @@
 "use client";
+import { CHAT_WORDS, type ChatLang } from "./chat-lang";
 import { ArrowUp, Check, ChevronRight, Copy, LoaderCircle, Undo2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@/lib/cn";
@@ -12,7 +13,7 @@ export type WorkStep = { title: string; items?: string[]; status?: "done" | "act
  * A message: what the customer asked, or the assistant's answer with what it changed (`step`: the editor's id for it)
  * and how it got there (`work`: how long it took and its steps, behind "Worked for 4s", as Cardboard's chat shows it).
  */
-export type ChatMessage = { from: "you" | "ai"; text: string; changes?: string[]; step?: number; failed?: boolean; work?: { ms: number; steps: WorkStep[] } };
+export type ChatMessage = { from: "you" | "ai"; text: string; changes?: string[]; step?: number; failed?: boolean; work?: { ms: number; steps: WorkStep[] }; lang?: ChatLang };
 
 /** How long the assistant worked: "4s", "1m 12s". */
 export function workTime(ms: number) {
@@ -73,6 +74,8 @@ export function ChatPanel({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, line * MAX_LINES + 8)}px`;
   }, [text, box]);
+  // Its own words (Worked for, Undo this) in the language of the message they answer; while it works, the last asked.
+  const asked = [...messages].reverse().find((m) => m.from === "you")?.lang ?? "en";
   const send = (value: string) => {
     const clean = value.trim();
     if (!clean || busy) return;
@@ -85,7 +88,7 @@ export function ChatPanel({
       <div ref={list} className={cn("min-h-[140px] space-y-4 overflow-y-auto px-1 py-1", fill ? "max-h-[420px] flex-1 lg:max-h-none" : "max-h-[420px]")} aria-live="polite">
         {messages.map((m, i) => (
           <div key={i} className={cn("group flex flex-col", m.from === "you" ? "items-end" : "items-start")}>
-            {m.from === "ai" && m.work && <Worked work={m.work} />}
+            {m.from === "ai" && m.work && <Worked work={m.work} lang={m.lang ?? "en"} />}
             <div className={cn("text-[13px] leading-relaxed [overflow-wrap:anywhere]", m.from === "you" ? "max-w-[85%] rounded-2xl bg-gray-alpha-200 px-3.5 py-2 text-gray-1000" : m.failed ? "rounded-lg border border-red-500/40 px-3 py-2 text-red-900" : "w-full text-gray-1000")}>
               {m.text}
               {m.from === "ai" && Boolean(m.changes?.length) && (
@@ -101,10 +104,10 @@ export function ChatPanel({
                   {canUndo(m) ? (
                     <button type="button" onClick={() => onUndo(m)} className="mt-1.5 flex items-center gap-1 text-xs font-medium text-gray-1000 underline-offset-2 hover:underline">
                       <Undo2 className="size-3" />
-                      Undo this
+                      {CHAT_WORDS[m.lang ?? "en"].undo}
                     </button>
                   ) : (
-                    <span className="mt-1.5 block text-xs text-gray-900">Undone</span>
+                    <span className="mt-1.5 block text-xs text-gray-900">{CHAT_WORDS[m.lang ?? "en"].undone}</span>
                   )}
                 </>
               )}
@@ -112,7 +115,7 @@ export function ChatPanel({
             {m.from === "ai" && !m.failed && <CopyAnswer text={m.text} />}
           </div>
         ))}
-        {busy && <Working steps={live} />}
+        {busy && <Working steps={live} lang={asked} />}
       </div>
       <form
         onSubmit={(e) => {
@@ -155,7 +158,7 @@ const SHIMMER = "animate-shimmer bg-[linear-gradient(90deg,var(--color-gray-900)
  * While the assistant works: one line, "Working for 12s ›", shimmering, as Cardboard's chat has it; a click opens its
  * steps as they happen (done, under way, to come), another closes them.
  */
-function Working({ steps }: { steps?: WorkStep[] | null }) {
+function Working({ steps, lang }: { steps?: WorkStep[] | null; lang: ChatLang }) {
   const [started] = useState(() => Date.now());
   const [now, setNow] = useState(started);
   useEffect(() => {
@@ -163,17 +166,17 @@ function Working({ steps }: { steps?: WorkStep[] | null }) {
     return () => clearInterval(timer);
   }, []);
   return (
-    <Fold label={<span className={SHIMMER}>Working for {workTime(now - started)}</span>} steps={steps ?? []} live />
+    <Fold label={<span className={SHIMMER}>{CHAT_WORDS[lang].workingFor(workTime(now - started))}</span>} steps={steps ?? []} lang={lang} live />
   );
 }
 
 /** "Worked for 4s ›" over an answer, closed; a click opens the steps the assistant took. */
-function Worked({ work }: { work: NonNullable<ChatMessage["work"]> }) {
-  return <Fold label={`Worked for ${workTime(work.ms)}`} steps={work.steps} />;
+function Worked({ work, lang }: { work: NonNullable<ChatMessage["work"]>; lang: ChatLang }) {
+  return <Fold label={CHAT_WORDS[lang].workedFor(workTime(work.ms))} steps={work.steps} lang={lang} />;
 }
 
 /** A line that opens the assistant's steps under it, and closes them again. `live`: they're still happening. */
-function Fold({ label, steps, live }: { label: React.ReactNode; steps: WorkStep[]; live?: boolean }) {
+function Fold({ label, steps, lang, live }: { label: React.ReactNode; steps: WorkStep[]; lang: ChatLang; live?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={cn("max-w-[85%]", !live && "mb-1.5")} role={live ? "status" : undefined}>
@@ -184,7 +187,7 @@ function Fold({ label, steps, live }: { label: React.ReactNode; steps: WorkStep[
       {/* Its height eases open and closed (a grid row from 0fr to 1fr). */}
       <div className={cn("grid transition-[grid-template-rows,opacity] duration-200 ease-out", open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
         <div className="overflow-hidden" aria-hidden={!open}>
-          <Chain steps={steps} />
+          <Chain steps={steps} lang={lang} />
         </div>
       </div>
     </div>
@@ -197,7 +200,7 @@ function Fold({ label, steps, live }: { label: React.ReactNode; steps: WorkStep[
  * The look follows odysseyui's Thought Chain on 21st.dev (the component Syed sent, 3 Nov), drawn with our own tokens
  * and no extra packages.
  */
-function Chain({ steps }: { steps: WorkStep[] }) {
+function Chain({ steps, lang }: { steps: WorkStep[]; lang: ChatLang }) {
   return (
     <ol>
       {steps.map((step, i) => {
@@ -219,7 +222,7 @@ function Chain({ steps }: { steps: WorkStep[] }) {
             <div className="min-w-0 pb-1">
               <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-medium leading-4">
                 <span className={status === "active" ? SHIMMER : status === "pending" ? "text-gray-900" : "text-gray-1000"}>{step.title}</span>
-                {status === "active" && <span className="rounded-full border border-gray-alpha-400 px-1.5 py-px text-[10px] font-normal text-gray-900">In progress</span>}
+                {status === "active" && <span className="rounded-full border border-gray-alpha-400 px-1.5 py-px text-[10px] font-normal text-gray-900">{CHAT_WORDS[lang].inProgress}</span>}
               </p>
               {status !== "pending" &&
                 step.items?.map((item, k) => (

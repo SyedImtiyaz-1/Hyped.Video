@@ -12,7 +12,7 @@ export const ChatBody = z.object({
   selection: z.string().trim().max(300).optional(),
   // The chat so far (the latest messages, checked again by cleanChatHistory), so "it", "more" and "undo that" make sense.
   history: z
-    .array(z.object({ from: z.enum(["you", "ai"]), text: z.string() }))
+    .array(z.object({ from: z.enum(["you", "ai"]), text: z.string(), answer: z.number().int().optional(), undone: z.boolean().optional() }))
     .max(40)
     .optional(),
   draft: z.object({

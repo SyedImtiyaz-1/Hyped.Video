@@ -7,6 +7,7 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import type { HandedChat } from "@/lib/clip-handoff";
 import { cn } from "@/lib/cn";
 import { freshSession } from "@/lib/fresh-session";
+import { CHAT_WORDS, chatLang } from "./chat-lang";
 import { ChatPanel, quoted, type ChatMessage, type WorkStep } from "./chat-panel";
 
 const FOLDERS: Record<PickFolder, string> = { downloads: "Downloads", desktop: "Desktop", videos: "Videos", documents: "Documents", pictures: "Pictures", music: "Music", any: "" };
@@ -93,25 +94,27 @@ export function EmptyWorkspace({ onFile, busy, error, note }: { onFile: (file: F
       setWanted({ ...asked, state: direct ? "opening" : undefined });
       if (!direct) void pickFrom(asked.folder);
     }
-    setSaid((s) => [...s, { from: "you", text: message }]);
+    const lang = chatLang(message);
+    const t = CHAT_WORDS[lang];
+    setSaid((s) => [...s, { from: "you", text: message, lang }]);
     setAsking(true);
     // Its steps: shown live as they happen (done, under way, to come), then under the answer's "Worked for": what
     // was asked, what happened to the video asked for, what was kept.
     const started = Date.now();
-    const steps: WorkStep[] = [{ title: "Read your request", items: [quoted(message)] }];
+    const steps: WorkStep[] = [{ title: t.read, items: [quoted(message)] }];
     const progress = (active: WorkStep, ...todo: WorkStep[]) => setLive([...steps, { ...active, status: "active" }, ...todo.map((t) => ({ ...t, status: "pending" as const }))]);
-    const answering: WorkStep = { title: "Writing the answer" };
+    const answering: WorkStep = { title: t.writing };
     const where = asked ? FOLDERS[asked.folder] || "your folders" : "";
     let file: File | null = null;
     try {
       if (asked && direct) {
-        progress({ title: `Looking in ${where}`, items: [asked.file ? `For ${asked.file}` : "For your newest video"] }, answering);
+        progress({ title: t.lookingIn(where), items: [asked.file ? t.lookingFor(asked.file) : t.newest] }, answering);
         file = await fromComputer(asked);
         if (file) bring(file);
         else setWanted({ ...asked, state: "missing" });
-        steps.push(file ? { title: `Found ${file.name}`, items: [`In ${where}`, "Put it in the library"] } : { title: `Looked in ${where}`, items: [asked.file ? `No video named ${asked.file} there` : "No video there"] });
+        steps.push(file ? { title: t.found(file.name), items: [t.inFolder(where), t.library] } : { title: t.lookedIn(where), items: [asked.file ? t.noneNamed(asked.file) : t.noVideo] });
       } else if (asked) {
-        steps.push({ title: `Opened ${where}`, items: ["For you to choose the video"] });
+        steps.push({ title: t.opened(where), items: [t.toChoose] });
       }
       progress(answering);
       await freshSession();
@@ -125,9 +128,9 @@ export function EmptyWorkspace({ onFile, busy, error, note }: { onFile: (file: F
       if (res.status === 401 || res.status === 404) throw new Error("Your sign-in on this page has expired. Reload the page, then ask again.");
       if (!res.ok || !data.reply) throw new Error(data.error ?? "The assistant didn't answer. Try again in a moment.");
       if (typeof data.keep === "string") setKept(data.keep);
-      if (data.keep && data.keep !== kept) steps.push({ title: "Kept your edit for the clip", items: [data.keep] });
+      if (data.keep && data.keep !== kept) steps.push({ title: t.kept, items: [data.keep] });
       if (data.pick && !file) setWanted((w) => ({ folder: data.pick!, file: data.file ?? w?.file ?? null, path: w?.path ?? null, state: w?.state }));
-      setSaid((s) => [...s, { from: "ai", text: data.reply!, work: { ms: Date.now() - started, steps } }]);
+      setSaid((s) => [...s, { from: "ai", text: data.reply!, work: { ms: Date.now() - started, steps }, lang }]);
     } catch (err) {
       setSaid((s) => [...s, { from: "ai", text: err instanceof Error ? err.message : "The assistant didn't answer.", failed: true }]);
     } finally {
