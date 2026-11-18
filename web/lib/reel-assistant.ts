@@ -3,7 +3,7 @@
 // under `next dev`, like uploads.
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { parseProjectAnswer, projectChatRequest, type ProjectAnswer, type ProjectChatInput } from "@launchreel/core/project-chat";
-import type { ChatTurn } from "@launchreel/core";
+import type { ChatFrame, ChatTurn } from "@launchreel/core";
 import { localCompletion, openaiKey } from "./local-openai";
 
 export type AssistantAnswer = { reply: string; ops: unknown[]; inputTokens: number; outputTokens: number };
@@ -13,7 +13,7 @@ export type StockAnswer = { clips: unknown[]; error?: string; status?: number };
 declare global {
   interface CloudflareEnv {
     REEL_ASSISTANT?: {
-      chat(input: { context: string; message: string; history?: ChatTurn[] }): Promise<AssistantAnswer>;
+      chat(input: { context: string; message: string; history?: ChatTurn[]; frames?: ChatFrame[] }): Promise<AssistantAnswer>;
       projectChat(input: ProjectChatInput): Promise<ProjectAnswer>;
       searchBroll(input: { query: string; portrait: boolean }): Promise<StockAnswer>;
     };
@@ -31,10 +31,10 @@ async function askDevRender<T>(path: string, body: unknown): Promise<T> {
 }
 
 /** The assistant's answer, or null when there's none to ask here (demo mode without a local render Worker). */
-export async function askAssistant(context: string, message: string, history: ChatTurn[] = []): Promise<AssistantAnswer | null> {
-  if (process.env.NODE_ENV === "development" && process.env.DEV_RENDER_URL) return askDevRender<AssistantAnswer>("/dev/reel-chat", { context, message, history });
+export async function askAssistant(context: string, message: string, history: ChatTurn[] = [], frames: ChatFrame[] = []): Promise<AssistantAnswer | null> {
+  if (process.env.NODE_ENV === "development" && process.env.DEV_RENDER_URL) return askDevRender<AssistantAnswer>("/dev/reel-chat", { context, message, history, frames });
   const { env } = await getCloudflareContext({ async: true });
-  return env.REEL_ASSISTANT ? env.REEL_ASSISTANT.chat({ context, message, history }) : null;
+  return env.REEL_ASSISTANT ? env.REEL_ASSISTANT.chat({ context, message, history, frames }) : null;
 }
 
 /**

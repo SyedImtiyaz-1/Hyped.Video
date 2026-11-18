@@ -23,6 +23,7 @@ import { AudioPanel, type SoundActions } from "./audio-panel";
 import { BrollLayer } from "./broll-layer";
 import { BrollPanel, type BrollActions, type BrollRow } from "./broll-panel";
 import { CHAT_WORDS, chatLang } from "./chat-lang";
+import { framesForAsk, grabFrame, useLookFrames } from "./look-frames";
 import { ChatPanel, quoted, type ChatMessage, type WorkStep } from "./chat-panel";
 import { describeChanges, revertChanges } from "./chat-steps";
 import { CutsPanel, type TrimActions } from "./cuts-panel";
@@ -325,6 +326,8 @@ export function ReelEditor({
   // The player: the time comes from the video every frame while it plays, jumping over cut stretches; sound effects
   // follow it on the cut clock.
   const video = useRef<HTMLVideoElement>(null);
+  // Frames of the clip for Ask AI to look at, made in the background (look-frames.ts).
+  const lookFrames = useLookFrames(previewUrl);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const clocks = useRef({ trims, cutAt, duration: draft.edit.duration });
@@ -858,7 +861,9 @@ export function ReelEditor({
     // The answer's steps, under "Worked for": what was asked, what the assistant looked at, what it worked out.
     const started = Date.now();
     const words = history.present.edit.words.length;
-    const looked = [t.at(clock(viewTime)), ...(selection ? [selection.label] : []), words ? t.captionWords(words) : t.noCaptions];
+    // What it sees: frames spread over the video as it plays, and the playhead's.
+    const frames = framesForAsk(lookFrames.current, cutAt, trims, { at: viewTime, image: video.current ? grabFrame(video.current) : null });
+    const looked = [t.at(clock(viewTime)), ...(selection ? [selection.label] : []), ...(frames.length ? [t.frames(frames.length)] : []), words ? t.captionWords(words) : t.noCaptions];
     const done: WorkStep[] = [
       { title: t.read, items: [quoted(message)] },
       { title: t.looked, items: looked },
@@ -869,7 +874,7 @@ export function ReelEditor({
     });
     // Live while it works, as Claude's and Cardboard's chats show it.
     setLive([...done, { title: t.working, status: "active" }, { title: t.making, status: "pending" }]);
-    const res = await fetch(localAsk ? "/api/local/chat" : `/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present, selection: selection?.ai, history: said.slice(-CHAT_HISTORY.turns) }) }).catch(() => null);
+    const res = await fetch(localAsk ? "/api/local/chat" : `/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present, selection: selection?.ai, history: said.slice(-CHAT_HISTORY.turns), frames }) }).catch(() => null);
     const body = res ? ((await res.json().catch(() => ({}))) as { reply?: string; ops?: ChatOp[]; error?: string }) : { error: "You're offline. Try again in a moment." };
     setAsking(false);
     setLive(null);
