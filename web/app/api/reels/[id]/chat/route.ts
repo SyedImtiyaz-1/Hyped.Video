@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { BROLL_LENGTH, chatContext, cleanChatHistory, longestShot, needsFootage, parseChatOps, parseClip, parseReel, parseReelEdit, reelEditable, sameClip, type BrollClip, type ChatOp, type ReelEdit } from "@launchreel/core";
+import { BROLL_LENGTH, chatContext, cleanChatFrames, cleanChatHistory, longestShot, needsFootage, parseChatOps, parseClip, parseReel, parseReelEdit, reelEditable, sameClip, type BrollClip, type ChatOp, type ReelEdit } from "@launchreel/core";
 import { ChatBody as Body, withSelection } from "@/lib/chat-body";
 import { chatAllowed as allowed } from "@/lib/chat-limit";
 import { getDb } from "@/lib/db";
@@ -58,7 +58,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!edit) return NextResponse.json({ error: "The reel's edits couldn't be read. Reload the editor and try again." }, { status: 400 });
   const draft = { options: parsed.data.draft.options, edit };
   try {
-    const answer = await askAssistant(withSelection(chatContext(draft, parsed.data.time, reel.video), parsed.data.selection), parsed.data.message, cleanChatHistory(parsed.data.history));
+    const answer = await askAssistant(withSelection(chatContext(draft, parsed.data.time, reel.video), parsed.data.selection), parsed.data.message, cleanChatHistory(parsed.data.history), cleanChatFrames(parsed.data.frames));
     if (!answer) return NextResponse.json({ error: "Chat edits aren't available here yet." }, { status: 503 });
     const checked = parseChatOps(answer.ops, edit, reel.video);
     const { ops, missing } = checked.some(needsFootage) ? await withFootage(checked, edit) : { ops: checked, missing: [] };

@@ -21,6 +21,7 @@ type Words = {
   looked: string;
   at: (time: string) => string;
   captionWords: (n: number) => string;
+  frames: (n: number) => string;
   noCaptions: string;
   workedOut: (n: number) => string;
   checked: string;
@@ -54,6 +55,7 @@ export const CHAT_WORDS: Record<ChatLang, Words> = {
     looked: "Looked at the reel",
     at: (t) => `At ${t}`,
     captionWords: (n) => `${n} caption words`,
+    frames: (n) => `${n} frames of the video`,
     noCaptions: "No captions yet",
     workedOut: (n) => `Worked out ${n} change${n === 1 ? "" : "s"}`,
     checked: "Checked them against your reel",
@@ -85,6 +87,7 @@ export const CHAT_WORDS: Record<ChatLang, Words> = {
     looked: "Reel dekhi",
     at: (t) => `${t} par`,
     captionWords: (n) => `${n} caption shabd`,
+    frames: (n) => `Video ke ${n} frame`,
     noCaptions: "Abhi captions nahi hain",
     workedOut: (n) => `${n} badlav tay kiye`,
     checked: "Reel se mila ke jaanche",
@@ -116,6 +119,7 @@ export const CHAT_WORDS: Record<ChatLang, Words> = {
     looked: "रील देखी",
     at: (t) => `${t} पर`,
     captionWords: (n) => `${n} कैप्शन शब्द`,
+    frames: (n) => `वीडियो के ${n} फ़्रेम`,
     noCaptions: "अभी कैप्शन नहीं हैं",
     workedOut: (n) => `${n} बदलाव तय किए`,
     checked: "रील से मिलाकर जाँचे",

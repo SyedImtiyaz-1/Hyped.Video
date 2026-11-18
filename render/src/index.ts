@@ -952,7 +952,7 @@ async function devFiles(request: Request, env: Env, key: string): Promise<Respon
 }
 
 /** What a chat edit sends: the reel as the LLM reads it (chatContext) and the customer's message. */
-type ReelChatInput = { context: string; message: string; history?: unknown };
+type ReelChatInput = { context: string; message: string; history?: unknown; frames?: unknown };
 /** What comes back, unchecked: the web app checks the changes against the reel (parseChatOps) before using them. */
 type ReelChatResult = { reply: string; ops: unknown[]; inputTokens: number; outputTokens: number };
 
@@ -967,7 +967,7 @@ async function reelChat(env: Env, input: ReelChatInput): Promise<ReelChatResult>
     body: JSON.stringify({
       model: REEL_PLAN_MODEL,
       reasoning_effort: "low",
-      messages: chatMessages(context, message, input.history),
+      messages: chatMessages(context, message, input.history, input.frames),
       response_format: { type: "json_schema", json_schema: { name: "reel_chat", strict: true, schema: CHAT_SCHEMA } },
     }),
     signal: AbortSignal.timeout(60_000),

@@ -28,7 +28,7 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       model: REEL_PLAN_MODEL,
       reasoning_effort: "low",
-      messages: chatMessages(withSelection(chatContext(draft, parsed.data.time), parsed.data.selection), parsed.data.message, parsed.data.history),
+      messages: chatMessages(withSelection(chatContext(draft, parsed.data.time), parsed.data.selection), parsed.data.message, parsed.data.history, parsed.data.frames),
       response_format: { type: "json_schema", json_schema: { name: "reel_chat", strict: true, schema: CHAT_SCHEMA } },
     }),
     signal: AbortSignal.timeout(60_000),

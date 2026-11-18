@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseLookChanges, REEL_FONTS, REEL_MAX_FONTS, REEL_STYLES, type ReelFont, type ReelStyle } from "@launchreel/core";
+import { CHAT_FRAMES, parseLookChanges, REEL_FONTS, REEL_MAX_FONTS, REEL_STYLES, type ReelFont, type ReelStyle } from "@launchreel/core";
 
 /**
  * An Ask AI request from the editor: the message, the playhead, what's picked (in words) and the draft (its options
@@ -14,6 +14,11 @@ export const ChatBody = z.object({
   history: z
     .array(z.object({ from: z.enum(["you", "ai"]), text: z.string(), answer: z.number().int().optional(), undone: z.boolean().optional() }))
     .max(40)
+    .optional(),
+  // Frames of the video for the assistant to look at (small JPEGs; checked again by cleanChatFrames).
+  frames: z
+    .array(z.object({ at: z.number(), image: z.string().max(CHAT_FRAMES.chars), playhead: z.boolean().optional() }))
+    .max(CHAT_FRAMES.max)
     .optional(),
   draft: z.object({
     options: z.object({
