@@ -61,15 +61,47 @@ export function describeChanges(before: Draft, after: Draft): string[] {
   return out;
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
 /**
- * The draft with one answer taken back: every part it changed put back as it was before it, the rest (changes made
- * since, in other parts) kept. Null when there's nothing left to take back (it was undone already).
+ * `now` with one change (`was` → `then`) taken back, as finely as it was made: in an object only the fields it changed
+ * (the caption look holds colour, casing, size and more, and undoing the colour must leave the casing), in a list only
+ * the items it added or removed, and a value only while it's still what the change made it (a later change wins).
+ */
+function takeBack(now: unknown, was: unknown, then: unknown): unknown {
+  if (!differs(was, then)) return now;
+  if (isRecord(now) && isRecord(was) && isRecord(then)) {
+    const out: Record<string, unknown> = { ...now };
+    for (const k of new Set([...Object.keys(was), ...Object.keys(then)])) {
+      const v = takeBack(now[k], was[k], then[k]);
+      if (v === undefined) delete out[k];
+      else out[k] = v;
+    }
+    return out;
+  }
+  if (Array.isArray(now) && Array.isArray(was) && Array.isArray(then)) {
+    // The same items in the same places (the words): each one on its own.
+    if (now.length === was.length && was.length === then.length) return now.map((v, i) => takeBack(v, was[i], then[i]));
+    const id = (v: unknown) => JSON.stringify(v);
+    const before = new Set(was.map(id));
+    const after = new Set(then.map(id));
+    const out = now.filter((v) => before.has(id(v)) || !after.has(id(v)));
+    was.forEach((v, i) => {
+      if (!after.has(id(v)) && !out.some((o) => id(o) === id(v))) out.splice(Math.min(i, out.length), 0, v);
+    });
+    return out;
+  }
+  return differs(now, then) ? now : was;
+}
+
+/**
+ * The draft with one answer taken back: what it changed put back as it was before it, field by field; the rest
+ * (changes made since, by other answers or by hand) kept. Null when there's nothing left to take back.
  */
 export function revertChanges(draft: Draft, before: Draft, after: Draft): Draft | null {
   const { options, edit } = touched(before, after);
-  if (!options.some((k) => differs(draft.options[k], before.options[k])) && !edit.some((k) => differs(draft.edit[k], before.edit[k]))) return null;
   const next = { options: { ...draft.options }, edit: { ...draft.edit } } as Draft;
-  for (const k of options) (next.options as Record<string, unknown>)[k] = before.options[k];
-  for (const k of edit) (next.edit as Record<string, unknown>)[k] = before.edit[k];
-  return next;
+  for (const k of options) (next.options as Record<string, unknown>)[k] = takeBack(draft.options[k], before.options[k], after.options[k]);
+  for (const k of edit) (next.edit as Record<string, unknown>)[k] = takeBack(draft.edit[k], before.edit[k], after.edit[k]);
+  return differs(next, draft) ? next : null;
 }

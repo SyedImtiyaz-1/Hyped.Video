@@ -11,7 +11,7 @@ import { REEL_SOUNDS, type ReelSound } from "@launchreel/core/sounds";
 import { punchAt, soundCues, zoomAim, zoomWindows } from "@launchreel/core/timeline";
 import { cutClock, onCutTimeline, parseTrims, pauseTrims, trimAt, trimmedWords, wordsTrim, type Trim } from "@launchreel/core/trims";
 import { libraryBed, MUSIC_DEFAULT_VOLUME, ORIGINAL_MUSIC } from "@launchreel/core/music-beds";
-import { applyChatOps, type ChatOp } from "@launchreel/core/reel-chat";
+import { applyChatOps, CHAT_HISTORY, type ChatOp } from "@launchreel/core/reel-chat";
 import { BROLL_LENGTH, brollAt, longestShot, parseBroll, type BrollShot } from "@launchreel/core/broll";
 import { parseTransitions, type PlacedTransition, transitionDirs, transitionEffects, transitionJoints, type TransitionKind, transitionPlaces, TRANSITIONS, withTrims } from "@launchreel/core/transitions";
 import { cn } from "@/lib/cn";
@@ -22,6 +22,7 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { AudioPanel, type SoundActions } from "./audio-panel";
 import { BrollLayer } from "./broll-layer";
 import { BrollPanel, type BrollActions, type BrollRow } from "./broll-panel";
+import { CHAT_WORDS, chatLang } from "./chat-lang";
 import { ChatPanel, quoted, type ChatMessage, type WorkStep } from "./chat-panel";
 import { describeChanges, revertChanges } from "./chat-steps";
 import { CutsPanel, type TrimActions } from "./cuts-panel";
@@ -846,36 +847,51 @@ export function ReelEditor({
   latest.current = history;
   const answered = useRef(0);
   const ask = async (message: string) => {
+    // The chat so far goes with it (the latest messages; failed ones left out), so "it", "more" and "undo that" make sense.
+    // Answers that changed something carry their number, so "undo that" or "wapas karo" can name one (undo_answer).
+    const said = chat.filter((m) => !m.failed).map((m) => ({ from: m.from, text: m.text, ...(m.step !== undefined ? { answer: m.step, undone: !undoable.has(m.step) } : {}) }));
     setAsking(true);
-    setChat((c) => [...c, { from: "you", text: message }]);
+    // Its steps and labels in the language they typed in (the reply comes from the model in kind).
+    const lang = chatLang(message);
+    const t = CHAT_WORDS[lang];
+    setChat((c) => [...c, { from: "you", text: message, lang }]);
     // The answer's steps, under "Worked for": what was asked, what the assistant looked at, what it worked out.
     const started = Date.now();
     const words = history.present.edit.words.length;
-    const looked = [`At ${clock(viewTime)}`, ...(selection ? [selection.label] : []), words ? `${words} caption words` : "No captions yet"];
+    const looked = [t.at(clock(viewTime)), ...(selection ? [selection.label] : []), words ? t.captionWords(words) : t.noCaptions];
     const done: WorkStep[] = [
-      { title: "Read your request", items: [quoted(message)] },
-      { title: "Looked at the reel", items: looked },
+      { title: t.read, items: [quoted(message)] },
+      { title: t.looked, items: looked },
     ];
     const work = (changes: string[]) => ({
       ms: Date.now() - started,
-      steps: [...done, ...(changes.length ? [{ title: `Worked out ${changes.length} change${changes.length === 1 ? "" : "s"}`, items: ["Checked them against your reel"] }, { title: "Made them in your reel" }] : [{ title: "Found nothing to change" }])],
+      steps: [...done, ...(changes.length ? [{ title: t.workedOut(changes.length), items: [t.checked] }, { title: t.made }] : [{ title: t.nothing }])],
     });
     // Live while it works, as Claude's and Cardboard's chats show it.
-    setLive([...done, { title: "Working out the changes", status: "active" }, { title: "Making them in your reel", status: "pending" }]);
-    const res = await fetch(localAsk ? "/api/local/chat" : `/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present, selection: selection?.ai }) }).catch(() => null);
+    setLive([...done, { title: t.working, status: "active" }, { title: t.making, status: "pending" }]);
+    const res = await fetch(localAsk ? "/api/local/chat" : `/api/reels/${jobId}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, time, draft: history.present, selection: selection?.ai, history: said.slice(-CHAT_HISTORY.turns) }) }).catch(() => null);
     const body = res ? ((await res.json().catch(() => ({}))) as { reply?: string; ops?: ChatOp[]; error?: string }) : { error: "You're offline. Try again in a moment." };
     setAsking(false);
     setLive(null);
     if (!res?.ok || !body.ops) return setChat((c) => [...c, { from: "ai", text: body.error ?? "That didn't work. Try again in a moment.", failed: true }]);
     const ops = body.ops;
-    if (!ops.length) return setChat((c) => [...c, { from: "ai", text: body.reply ?? "Done.", work: work([]) }]);
+    if (!ops.length) return setChat((c) => [...c, { from: "ai", text: body.reply ?? "Done.", work: work([]), lang }]);
+    // Earlier answers it was asked to take back go first (as Undo this does), then its own changes.
+    const make = (d: Draft) =>
+      applyChatOps(
+        ops.reduce((x, op) => {
+          const s = op.op === "undo_answer" ? steps.current.get(op.answer) : undefined;
+          return (s && revertChanges(x, s.before, s.after)) ?? x;
+        }, d),
+        ops.filter((op) => op.op !== "undo_answer"),
+      ) as Draft;
     const before = latest.current.present;
-    const after = applyChatOps(before, ops) as Draft;
-    update((d) => (d === before ? after : (applyChatOps(d, ops) as Draft)));
+    const after = make(before);
+    update((d) => (d === before ? after : make(d)));
     const step = ++answered.current;
     steps.current.set(step, { before, after });
     const changes = describeChanges(before, after);
-    setChat((c) => [...c, { from: "ai", text: body.reply ?? "Done.", changes, step, work: work(changes) }]);
+    setChat((c) => [...c, { from: "ai", text: body.reply ?? "Done.", changes, step, work: work(changes), lang }]);
   };
   // Undo this: the answer's parts put back, as a step of its own (so it can be redone); later edits elsewhere stay.
   const undoAnswer = (m: ChatMessage) => {

@@ -10,6 +10,11 @@ export const ChatBody = z.object({
   time: z.number().min(0).default(0),
   // What the customer has picked in the editor (a word, a caption line, a shot, an effect, a stretch), in words.
   selection: z.string().trim().max(300).optional(),
+  // The chat so far (the latest messages, checked again by cleanChatHistory), so "it", "more" and "undo that" make sense.
+  history: z
+    .array(z.object({ from: z.enum(["you", "ai"]), text: z.string(), answer: z.number().int().optional(), undone: z.boolean().optional() }))
+    .max(40)
+    .optional(),
   draft: z.object({
     options: z.object({
       style: z.enum(REEL_STYLES as [ReelStyle, ...ReelStyle[]]),
