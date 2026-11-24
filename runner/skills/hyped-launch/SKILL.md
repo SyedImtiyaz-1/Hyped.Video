@@ -28,6 +28,8 @@ ad). For a CLI or library, the real UI is the terminal: type the real command, s
 
 ## Before you plan
 
+Read [look.md](look.md) before the first scene: the stage, type, motion and depth every launch video aims for.
+
 Add these to `brag-plan.md`, under the core plan's angle:
 
 - **The one result**: the single frame that proves the product works (the finished report, the paid invoice, the
