@@ -1,0 +1,173 @@
+# Checks every pull request, and deploys hyped.video to Cloudflare on every push to main (a merged PR):
+#   checks  → type-check web, render and runner (as before any PR); a PR stops here.
+#   changes → what the push touched: render (render, runner, core), web (web, core), the database schema.
+#   render  → npm run deploy:render (builds the runner's container image); before web, which calls it.
+#   web     → npm run deploy:web (scripts/deploy-web.mjs: public settings only, live Clerk keys required), then a health
+#             check of hyped.video; if it fails, the web Worker is rolled back to the version before.
+# A change to packages/core/prisma/schema.prisma isn't deployed by itself: run `npm run prod:db` first, then start this
+# workflow by hand (Actions → Deploy → Run workflow, "schema pushed" ticked).
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN      a token for the Hyped account only: Workers Scripts edit, Workers Routes edit,
+#                             Containers edit, Account settings read, (and R2 / Hyperdrive read if wrangler asks)
+#   CLOUDFLARE_ACCOUNT_ID     the Hyped account's id
+#   CLERK_LIVE_PUBLISHABLE_KEY, CLERK_LIVE_SECRET_KEY   web/.env.production.local's live Clerk keys
+name: Deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      schema_pushed:
+        description: "The schema change is already on the production database (npm run prod:db)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Type-check web
+        run: npx tsc --noEmit
+        working-directory: web
+      - name: Type-check render
+        run: npx tsc --noEmit
+        working-directory: render
+      - name: Type-check runner
+        run: npx tsc --noEmit
+        working-directory: runner
+
+  changes:
+    if: github.event_name != 'pull_request'
+    needs: checks
+    runs-on: ubuntu-latest
+    outputs:
+      render: ${{ steps.diff.outputs.render }}
+      web: ${{ steps.diff.outputs.web }}
+      schema: ${{ steps.diff.outputs.schema }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          SCHEMA_PUSHED: ${{ inputs.schema_pushed }}
+        run: |
+          # A manual run, a first push or a rewritten history deploys both.
+          if [ "$MANUAL" = "true" ] || [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files="ALL"
+          else
+            files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          fi
+          echo "Changed: $files"
+          has() { [ "$files" = "ALL" ] || echo "$files" | grep -qE "$1"; }
+          has '^(render/|runner/|packages/core/|package-lock\.json)' && echo "render=true" >> "$GITHUB_OUTPUT" || echo "render=false" >> "$GITHUB_OUTPUT"
+          has '^(web/|packages/core/|scripts/deploy-web\.mjs|package-lock\.json)' && echo "web=true" >> "$GITHUB_OUTPUT" || echo "web=false" >> "$GITHUB_OUTPUT"
+          if [ "$files" != "ALL" ] && echo "$files" | grep -q '^packages/core/prisma/schema\.prisma$' && [ "$SCHEMA_PUSHED" != "true" ]; then
+            echo "schema=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "schema=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  schema:
+    needs: changes
+    if: needs.changes.outputs.schema == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::This push changes the database schema. Run 'npm run prod:db' first, then Actions → Deploy → Run workflow with 'schema pushed' ticked. Nothing was deployed."
+          exit 1
+
+  render:
+    needs: changes
+    if: needs.changes.outputs.schema == 'false' && needs.changes.outputs.render == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: deploy-render
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Make room for the container image
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Secrets present
+        run: |
+          [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "::error::Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to the repository's secrets."; exit 1; }
+      - run: npm ci
+      - name: Deploy the render Worker and its container
+        run: npm run deploy:render
+
+  web:
+    needs: [changes, render]
+    # After render when it deployed; on its own when only the web changed.
+    if: always() && needs.changes.result == 'success' && needs.changes.outputs.schema == 'false' && needs.changes.outputs.web == 'true' && (needs.render.result == 'success' || needs.render.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-web
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLERK_LIVE_PUBLISHABLE_KEY: ${{ secrets.CLERK_LIVE_PUBLISHABLE_KEY }}
+      CLERK_LIVE_SECRET_KEY: ${{ secrets.CLERK_LIVE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Secrets present
+        run: |
+          for s in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLERK_LIVE_PUBLISHABLE_KEY CLERK_LIVE_SECRET_KEY; do
+            [ -n "${!s}" ] || { echo "::error::Add $s to the repository's secrets."; exit 1; }
+          done
+      - run: npm ci
+      - name: The Clerk keys deploy-web.mjs reads
+        run: |
+          umask 077
+          printf 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=%s\n' "$CLERK_LIVE_PUBLISHABLE_KEY" > web/.env.local
+          printf 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\n' "$CLERK_LIVE_PUBLISHABLE_KEY" "$CLERK_LIVE_SECRET_KEY" > web/.env.production.local
+      - name: Deploy the web Worker
+        run: npm run deploy:web
+        env:
+          REQUIRE_LIVE_CLERK: "1"
+      - name: Health check
+        id: health
+        run: |
+          for i in 1 2 3 4 5 6; do
+            home=$(curl -s -o /dev/null -w '%{http_code}' https://hyped.video/)
+            signin=$(curl -s https://hyped.video/sign-in)
+            if [ "$home" = "200" ] && echo "$signin" | grep -q 'pk_live_'; then echo "hyped.video is up"; exit 0; fi
+            echo "Try $i: home $home; sign-in page with the live key: $(echo "$signin" | grep -c pk_live_)"; sleep 15
+          done
+          exit 1
+      - name: Roll back the web Worker
+        if: failure() && steps.health.outcome == 'failure'
+        run: npx wrangler rollback --name hyped-web --yes --message "Health check failed after ${GITHUB_SHA::7}"
+        working-directory: web
+      - name: Remove the key files
+        if: always()
+        run: rm -f web/.env.local web/.env.production.local

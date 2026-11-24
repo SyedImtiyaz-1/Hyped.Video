@@ -57,6 +57,12 @@ async function liveClerk() {
   return { publishable, secret };
 }
 const live = await liveClerk();
+// The automatic deploy (.github/workflows/deploy.yml) sets REQUIRE_LIVE_CLERK: hyped.video signs in with the live keys,
+// so it stops here rather than ship the development ones and break everyone's sign-in.
+if (process.env.REQUIRE_LIVE_CLERK && !live) {
+  console.error("REQUIRE_LIVE_CLERK is set but the live Clerk keys aren't usable (see above); nothing deployed.");
+  process.exit(1);
+}
 
 const publicEnv = {};
 for (const [k, v] of local) if (k.startsWith("NEXT_PUBLIC_") && v) publicEnv[k] = v;
